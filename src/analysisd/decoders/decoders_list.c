@@ -21,12 +21,10 @@
 static OSDecoderNode *_OS_AddOSDecoder(OSDecoderNode *s_node, OSDecoderInfo *pi);
 
 /* Create the Event List */
-void OS_CreateOSDecoderList()
-{
+void OS_CreateOSDecoderList() {
+
     os_analysisd_decoderlist_pn = NULL;
     os_analysisd_decoderlist_nopn = NULL;
-
-    return;
 }
 
 /* Get first osdecoder */
@@ -195,4 +193,41 @@ int OS_AddOSDecoder(OSDecoderInfo *pi, OSDecoderNode **pn_osdecodernode, OSDecod
         }
     }
     return (1);
+}
+
+void os_remove_decoders_list(OSDecoderNode *decoderlist_pn, OSDecoderNode *decoderlist_npn) {
+
+    OSHash *decoders;
+
+    if (decoders = OSHash_Create(), !decoders) {
+        return;
+    }
+
+    OSHash_SetFreeDataPointer(decoders, (void (*)(void *))FreeDecoderInfo);
+
+    os_remove_decodernode(decoderlist_pn, decoders);
+    os_remove_decodernode(decoderlist_npn, decoders);
+
+    OSHash_Free(decoders);
+}
+
+void os_remove_decodernode(OSDecoderNode *node, OSHash *decoders) {
+
+    OSDecoderNode *tmp_node;
+
+    while (node) {
+
+        if (node->child) {
+            os_remove_decodernode(node->child, decoders);
+        }
+
+        tmp_node = node;
+        node = node->next;
+
+        if (OSHash_Get_ex(decoders, tmp_node->osdecoder->internal_id) == NULL) {
+            OSHash_Add_ex(decoders, tmp_node->osdecoder->internal_id, tmp_node->osdecoder);
+        }
+
+        os_free(tmp_node);
+    }
 }

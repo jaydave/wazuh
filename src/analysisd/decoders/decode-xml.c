@@ -24,7 +24,6 @@ static int os_setdecoderids(const char *p_name);
 static int ReadDecodeAttrs(char *const *names, char *const *values);
 static OSStore *os_decoder_store = NULL;
 
-static void FreeDecoderInfo(OSDecoderInfo *pi);
 
 int getDecoderfromlist(const char *name)
 {
@@ -148,7 +147,7 @@ static int ReadDecodeAttrs(char *const *names, char *const *values)
     return (AFTER_ERROR);
 }
 
-int ReadDecodeXML(const char *file)
+int ReadDecodeXML(const char *file, OSDecoderNode **decoderlist_pn,  OSDecoderNode **decoderlist_nopn)
 {
     OS_XML xml;
     XML_NODE node = NULL;
@@ -305,6 +304,10 @@ int ReadDecodeXML(const char *file)
             merror(MEM_ERROR, errno, strerror(errno));
             goto cleanup;
         }
+
+        int size_int_id = strlen(file) + 10;
+        os_calloc(size_int_id, sizeof(char), pi->internal_id);
+        snprintf(pi->internal_id, size_int_id, "%s%d", file, i);
 
         /* Add decoder */
         if (!addDecoder2list(pi->name)) {
@@ -478,6 +481,7 @@ int ReadDecodeXML(const char *file)
             else if (strcasecmp(elements[j]->element, xml_order) == 0) {
                 char **norder, **s_norder;
                 int order_int = 0;
+                int dfield_int = 0;
 
                 /* Maximum number for the order is limited by decoder_order_size */
 
@@ -534,16 +538,17 @@ int ReadDecodeXML(const char *file)
                         pi->order[order_int] = SystemName_FP;
                     } else {
                         pi->order[order_int] = DynamicField_FP;
-                        os_strdup(word, pi->fields[order_int]);
+                        os_strdup(word, pi->fields[dfield_int]);
+                        dfield_int++;
                     }
 
-                    free(*norder);
+                    os_free(*norder);
                     norder++;
 
                     order_int++;
                 }
 
-                free(s_norder);
+                os_free(s_norder);
             }
 
             else if (strcasecmp(elements[j]->element, xml_accumulate) == 0) {
@@ -756,7 +761,7 @@ int ReadDecodeXML(const char *file)
         }
 
         /* Add osdecoder to the list */
-        if (!OS_AddOSDecoder(pi, &os_analysisd_decoderlist_pn, &os_analysisd_decoderlist_nopn)) {
+        if (!OS_AddOSDecoder(pi, decoderlist_pn, decoderlist_nopn)) {
             merror(DECODER_ERROR);
             goto cleanup;
         }
@@ -854,26 +859,31 @@ char *_loadmemory(char *at, char *str)
 }
 
 void FreeDecoderInfo(OSDecoderInfo *pi) {
-    int i;
 
-    if (pi) {
-        free(pi->parent);
-        free(pi->name);
-
-        if (pi->fields) {
-            for (i = 0; i < Config.decoder_order_size; i++) {
-                free(pi->fields[i]);
-            }
-
-            free(pi->fields);
-        }
-
-        free(pi->fts_fields);
-        free(pi->regex);
-        free(pi->prematch);
-        free(pi->program_name);
-        free(pi->order);
-
-        free(pi);
+    if (pi == NULL) {
+        return;
     }
+
+    if (pi->fields) {
+        for (int i = 0; pi->fields[i]; i++) {
+            os_free(pi->fields[i]);
+        }
+        os_free(pi->fields);
+    }
+
+    os_free(pi->order);
+    os_free(pi->parent);
+    os_free(pi->name);
+    os_free(pi->fts_fields);
+    os_free(pi->ftscomment);
+
+    if (pi->regex) OSRegex_FreePattern(pi->regex);
+    os_free(pi->regex);
+    if (pi->prematch) OSRegex_FreePattern(pi->prematch);
+    os_free(pi->prematch);
+    if (pi->program_name) OSMatch_FreePattern(pi->program_name);
+    os_free(pi->program_name);
+
+    os_free(pi->internal_id);
+    os_free(pi);
 }
