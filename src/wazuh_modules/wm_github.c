@@ -14,7 +14,7 @@
 // Remove static qualifier when unit testing
 #define STATIC
 #ifdef WIN32
-    #include "unit_tests/wrappers/wazuh/shared/url_wrappers.h"
+    #include "../unit_tests/wrappers/wazuh/shared/url_wrappers.h"
 #endif
 #else
 #define STATIC static
@@ -73,12 +73,13 @@ STATIC void wm_github_scan_failure_action(wm_github_fail **current_fails, char *
 
 /* Context definition */
 const wm_context WM_GITHUB_CONTEXT = {
-    GITHUB_WM_NAME,
-    (wm_routine)wm_github_main,
-    (void(*)(void *))wm_github_destroy,
-    (cJSON * (*)(const void *))wm_github_dump,
-    NULL,
-    NULL
+    .name = GITHUB_WM_NAME,
+    .start = (wm_routine)wm_github_main,
+    .destroy = (void(*)(void *))wm_github_destroy,
+    .dump = (cJSON * (*)(const void *))wm_github_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 #ifdef WIN32

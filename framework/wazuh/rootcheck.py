@@ -12,7 +12,8 @@ from wazuh.core.wdb import WazuhDBConnection
 from wazuh.rbac.decorators import expose_resources
 
 
-@expose_resources(actions=["rootcheck:run"], resources=["agent:id:{agent_list}"])
+@expose_resources(actions=["rootcheck:run"], resources=["agent:id:{agent_list}"],
+                  post_proc_kwargs={'exclude_codes': [1701, 1707]})
 def run(agent_list: list = None) -> AffectedItemsWazuhResult:
     """Run a rootcheck scan in the specified agents.
 
@@ -126,7 +127,7 @@ def get_last_scan(agent_list: list) -> AffectedItemsWazuhResult:
 @expose_resources(actions=["rootcheck:read"], resources=["agent:id:{agent_list}"])
 def get_rootcheck_agent(agent_list: list = None, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort: str = None,
                         search: str = None, select: str = None, filters: dict = None, q: str = '',
-                        distinct: bool = None) -> AffectedItemsWazuhResult:
+                        distinct: bool = False) -> AffectedItemsWazuhResult:
     """Return a list of events from the rootcheck database.
 
     Parameters

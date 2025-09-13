@@ -77,7 +77,7 @@ class InitAgent:
             self.cur.executescript(f.read())
 
         self.never_connected_fields = {'status', 'name', 'ip', 'registerIP', 'node_name', 'dateAdd', 'id',
-                                       'group_config_status'}
+                                       'group_config_status', 'status_code'}
         self.pending_fields = self.never_connected_fields | {'manager', 'lastKeepAlive'}
         self.manager_fields = self.pending_fields | {'version', 'os', 'group'}
         self.active_fields = self.manager_fields | {'group', 'mergedSum', 'configSum'}
@@ -346,17 +346,17 @@ def test_WazuhDBQueryGroupByAgents_format_data_into_dictionary(mock_socket_conn)
                          {'count': 1, 'name': 'wazuh-agent1'}]
 
     result = query_group._format_data_into_dictionary()
-    assert all(x['os']['name'] == 'unknown' for x in result['items'])
+    assert all(x['os']['name'] == 'N/A' for x in result['items'])
 
 
 @pytest.mark.parametrize('filter_fields, expected_response', [
     (['os.codename'], [{'os': {'codename': 'Bionic Beaver'}, 'count': 3}, {'os': {'codename': 'Xenial'}, 'count': 1},
-                       {'os': {'codename': 'unknown'}, 'count': 2}, {'os': {'codename': 'XP'}, 'count': 3}]),
+                       {'os': {'codename': 'N/A'}, 'count': 2}, {'os': {'codename': 'XP'}, 'count': 3}]),
     (['node_name'], [{'count': 7, 'node_name': 'node01'}, {'count': 2, 'node_name': 'unknown'}]),
     (['status', 'os.version'], [{'os': {'version': '18.04.1 LTS'}, 'count': 2, 'status': 'active'},
                                 {'os': {'version': '16.04.1 LTS'}, 'count': 1, 'status': 'active'},
-                                {'os': {'version': 'unknown'}, 'count': 1, 'status': 'never_connected'},
-                                {'os': {'version': 'unknown'}, 'count': 1, 'status': 'pending'},
+                                {'os': {'version': 'N/A'}, 'count': 1, 'status': 'never_connected'},
+                                {'os': {'version': 'N/A'}, 'count': 1, 'status': 'pending'},
                                 {'os': {'version': '18.04.1 LTS'}, 'count': 1, 'status': 'disconnected'},
                                 {'os': {'version': '5.2'}, 'count': 2, 'status': 'active'},
                                 {'os': {'version': '7.2'}, 'count': 1, 'status': 'active'}])
@@ -705,6 +705,9 @@ def test_agent_add_ko(mock_maganer_status):
 
 @pytest.mark.parametrize("name, ip, id, key, force", [
     ('test_agent', '172.19.0.100', None, None, None),
+    ('test_agent', 'any', '001', None, None),
+    ('test_agent', 'any', None, 'MDAyIHdpbmRvd3MtYWdlbnQyIGFueSAzNDA2MjgyMjEwYmUwOWVlMWViNDAyZTYyODZmNWQ2OTE5MjBkODN'
+                                'jNTVjZDE5N2YyMzk3NzA0YWRhNjg1YzQz', None),
     ('test_agent', '172.19.0.100', '002', 'MDAyIHdpbmRvd3MtYWdlbnQyIGFueSAzNDA2MjgyMjEwYmUwOWVlMWViNDAyZTYyODZmNWQ2O'
                                           'TE5MjBkODNjNTVjZDE5N2YyMzk3NzA0YWRhNjg1YzQz',
      {"enabled": True, "disconnected_time": {"enabled": True, "value": "1h"}})
@@ -732,8 +735,10 @@ def test_agent_add_authd(mock_wazuh_socket, name, ip, id, key, force):
     mock_wazuh_socket.return_value.receive.assert_called_once()
     mock_wazuh_socket.return_value.close.assert_called_once()
     socket_msg = {"function": "add", "arguments": {"name": name, "ip": ip}}
-    if id and key:
-        socket_msg["arguments"].update({"id": id, "key": key})
+    if id:
+        socket_msg["arguments"].update({"id": id})
+    if key:
+        socket_msg["arguments"].update({"key": key})
     if force:
         socket_msg["arguments"].update({"force": {"key_mismatch": True, **force}})
 
@@ -1221,9 +1226,9 @@ def test_agent_get_config_ko(socket_mock, send_mock, mock_wazuh_socket):
 def test_agent_get_stats(socket_mock, send_mock, mock_wazuh_socket):
     """Test get_stats method returns expected message."""
     agent = Agent('001')
-    mock_wazuh_socket.return_value.receive.return_value = b'{"error":0, "data":{"test":0}}'
+    mock_wazuh_socket.return_value.receive.return_value = b'{"error":0, "data":{"global":{}, "interval":{}}}'
     result = agent.get_stats('logcollector')
-    assert result == {"test": 0}, 'Result message is not as expected.'
+    assert result == {'global': {}, 'interval': {}}, 'Result message is not as expected.'
 
 
 @patch('wazuh.core.wazuh_socket.WazuhSocket')

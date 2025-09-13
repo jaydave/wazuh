@@ -20,7 +20,7 @@ logger = logging.getLogger('wazuh-api')
 
 async def get_lists(request, pretty: bool = False, wait_for_complete: bool = False, offset: int = 0, limit: int = None,
                     select: list = None, sort: str = None, search: str = None, filename: str = None,
-                    relative_dirname: str = None) -> web.Response:
+                    relative_dirname: str = None, q: str = None, distinct: bool = False) -> web.Response:
     """Get all CDB lists.
 
     Parameters
@@ -45,6 +45,10 @@ async def get_lists(request, pretty: bool = False, wait_for_complete: bool = Fal
         Filenames to filter by (separated by comma).
     relative_dirname : str
         Filter by relative dirname.
+    q : str
+        Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -61,6 +65,8 @@ async def get_lists(request, pretty: bool = False, wait_for_complete: bool = Fal
                 'complementary_search': parse_api_param(search, 'search')['negation'] if search is not None else None,
                 'filename': filename,
                 'relative_dirname': relative_dirname,
+                'q': q,
+                'distinct': distinct
                 }
 
     dapi = DistributedAPI(f=cdb_list.get_lists,
@@ -119,15 +125,15 @@ async def get_file(request, pretty: bool = False, wait_for_complete: bool = Fals
     return response
 
 
-async def put_file(request, body: dict, overwrite: bool = False, pretty: bool = False, wait_for_complete: bool = False,
+async def put_file(request, body: bytes, overwrite: bool = False, pretty: bool = False, wait_for_complete: bool = False,
                    filename: str = None) -> web.Response:
     """Upload content of CDB list file.
 
     Parameters
     ----------
     request : connexion.request
-    body : dict
-        Dictionary with the content of the file to be uploaded.
+    body : bytes
+        Bytes object with the content of the file to be uploaded.
     pretty : bool
         Show results in human-readable format.
     wait_for_complete : bool

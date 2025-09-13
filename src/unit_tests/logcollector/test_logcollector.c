@@ -150,6 +150,50 @@ static int teardown_process(void **state) {
     return 0;
 }
 
+static int setup_regex(void **state) {
+    logreader *regex_config = calloc(1, sizeof(logreader));
+    regex_config->regex_ignore = NULL;
+    regex_config->regex_restrict = NULL;
+
+    regex_config->regex_ignore = OSList_Create();
+    if (regex_config->regex_ignore == NULL) {
+        merror(MEM_ERROR, errno, strerror(errno));
+        return -1;
+    }
+    OSList_SetFreeDataPointer(regex_config->regex_ignore, (void (*)(void *))w_free_expression);
+
+    regex_config->regex_restrict = OSList_Create();
+    if (regex_config->regex_restrict == NULL) {
+        merror(MEM_ERROR, errno, strerror(errno));
+        return -1;
+    }
+    OSList_SetFreeDataPointer(regex_config->regex_restrict, (void (*)(void *))w_free_expression);
+
+    *state = regex_config;
+
+    return 0;
+}
+
+static int teardown_regex(void **state) {
+    logreader *regex_config = *state;
+
+    expect_function_call_any(__wrap_pthread_rwlock_wrlock);
+    expect_function_call_any(__wrap_pthread_rwlock_unlock);
+
+    if (regex_config->regex_ignore) {
+        OSList_Destroy(regex_config->regex_ignore);
+        regex_config->regex_ignore = NULL;
+    }
+    if (regex_config->regex_restrict) {
+        OSList_Destroy(regex_config->regex_restrict);
+        regex_config->regex_restrict = NULL;
+    }
+
+    os_free(regex_config);
+
+    return 0;
+}
+
 /* wraps */
 
 /* tests */
@@ -727,8 +771,8 @@ void test_w_save_file_status_wfopen_error(void ** state) {
 
     expect_function_call(__wrap_cJSON_Delete);
 
-    expect_string(__wrap_wfopen, __filename, "queue/logcollector/file_status.json");
-    expect_string(__wrap_wfopen, __modes, "w");
+    expect_string(__wrap_wfopen, path, "queue/logcollector/file_status.json");
+    expect_string(__wrap_wfopen, mode, "w");
     will_return(__wrap_wfopen, 0);
 
     expect_string(__wrap__merror_exit, formatted_msg, "(1103): Could not open file 'queue/logcollector/file_status.json' due to [(0)-(Success)].");
@@ -794,8 +838,8 @@ void test_w_save_file_status_fwrite_error(void ** state) {
 
     expect_function_call(__wrap_cJSON_Delete);
 
-    expect_string(__wrap_wfopen, __filename, "queue/logcollector/file_status.json");
-    expect_string(__wrap_wfopen, __modes, "w");
+    expect_string(__wrap_wfopen, path, "queue/logcollector/file_status.json");
+    expect_string(__wrap_wfopen, mode, "w");
     will_return(__wrap_wfopen, "test");
 
     will_return(__wrap_fwrite, 0);
@@ -869,8 +913,8 @@ void test_w_save_file_status_OK(void ** state) {
 
     expect_function_call(__wrap_cJSON_Delete);
 
-    expect_string(__wrap_wfopen, __filename, "queue/logcollector/file_status.json");
-    expect_string(__wrap_wfopen, __modes, "w");
+    expect_string(__wrap_wfopen, path, "queue/logcollector/file_status.json");
+    expect_string(__wrap_wfopen, mode, "w");
     will_return(__wrap_wfopen, "test");
 
     will_return(__wrap_fwrite, 1);
@@ -1575,9 +1619,9 @@ void test_w_initialize_file_status_fopen_fail(void ** state) {
     expect_function_call(__wrap_OSHash_SetFreeDataPointer);
     will_return(__wrap_OSHash_SetFreeDataPointer, 1);
 
-    expect_string(__wrap_fopen, path, LOCALFILE_STATUS);
-    expect_string(__wrap_fopen, mode, "r");
-    will_return(__wrap_fopen, NULL);
+    expect_string(__wrap_wfopen, path, LOCALFILE_STATUS);
+    expect_string(__wrap_wfopen, mode, "r");
+    will_return(__wrap_wfopen, NULL);
 
     expect_string(__wrap__merror, formatted_msg, "(1103): Could not open file 'queue/logcollector/file_status.json' due to [(0)-(Success)].");
 
@@ -1593,9 +1637,9 @@ void test_w_initialize_file_status_fread_fail(void ** state) {
     expect_function_call(__wrap_OSHash_SetFreeDataPointer);
     will_return(__wrap_OSHash_SetFreeDataPointer, 1);
 
-    expect_string(__wrap_fopen, path, LOCALFILE_STATUS);
-    expect_string(__wrap_fopen, mode, "r");
-    will_return(__wrap_fopen, "test");
+    expect_string(__wrap_wfopen, path, LOCALFILE_STATUS);
+    expect_string(__wrap_wfopen, mode, "r");
+    will_return(__wrap_wfopen, "test");
 
     will_return(__wrap_fread, "test");
     will_return(__wrap_fread, 0);
@@ -1628,9 +1672,9 @@ void test_w_initialize_file_status_OK(void ** state) {
     expect_function_call(__wrap_OSHash_SetFreeDataPointer);
     will_return(__wrap_OSHash_SetFreeDataPointer, 1);
 
-    expect_string(__wrap_fopen, path, LOCALFILE_STATUS);
-    expect_string(__wrap_fopen, mode, "r");
-    will_return(__wrap_fopen, "test");
+    expect_string(__wrap_wfopen, path, LOCALFILE_STATUS);
+    expect_string(__wrap_wfopen, mode, "r");
+    will_return(__wrap_wfopen, "test");
 
     will_return(__wrap_fread, "test");
     will_return(__wrap_fread, 1);
@@ -2255,6 +2299,111 @@ void test_w_macos_release_log_execution_log_stream_not_launched_and_show_launche
 
 }
 
+void check_ignore_and_restrict_null_config(void ** state) {
+    logreader *regex_config = *state;
+
+    int ret = check_ignore_and_restrict(NULL, NULL, "testing log line");
+    assert_false(ret);
+}
+
+void check_ignore_and_restrict_not_ignored(void ** state) {
+    logreader *regex_config = *state;
+    w_expression_t * expression_ignore;
+    char *str_test = "testing log not match";
+
+    expect_function_call_any(__wrap_pthread_rwlock_wrlock);
+    expect_function_call_any(__wrap_pthread_rwlock_unlock);
+    expect_function_call_any(__wrap_pthread_rwlock_rdlock);
+
+    w_calloc_expression_t(&expression_ignore, EXP_TYPE_PCRE2);
+    w_expression_compile(expression_ignore, "ignore.*", 0);
+    OSList_InsertData(regex_config->regex_ignore, NULL, expression_ignore);
+
+    will_return(wrap_pcre2_match_data_create_from_pattern, 1);
+    will_return(wrap_pcre2_match, 0);
+
+    int ret = check_ignore_and_restrict(regex_config->regex_ignore, NULL, str_test);
+
+    assert_false(ret);
+}
+
+void check_ignore_and_restrict_ignored(void ** state) {
+    logreader *regex_config = *state;
+    w_expression_t * expression_ignore;
+    char *str_test = "testing log with ignore word";
+    char *aux[2];
+    aux[0] = str_test;
+    aux[1] = str_test+1;
+    char log_str[PATH_MAX + 1] = {0};
+
+    expect_function_call_any(__wrap_pthread_rwlock_wrlock);
+    expect_function_call_any(__wrap_pthread_rwlock_unlock);
+
+    w_calloc_expression_t(&expression_ignore, EXP_TYPE_PCRE2);
+    w_expression_compile(expression_ignore, "ignore.*", 0);
+    OSList_InsertData(regex_config->regex_ignore, NULL, expression_ignore);
+
+    will_return(wrap_pcre2_match_data_create_from_pattern, 1);
+    will_return(wrap_pcre2_match, 1);
+    will_return(wrap_pcre2_get_ovector_pointer, aux);
+
+    snprintf(log_str, PATH_MAX, LF_MATCH_REGEX, "testing log with ignore word", "ignore", "ignore.*");
+    expect_string(__wrap__mdebug2, formatted_msg, log_str);
+
+    int ret = check_ignore_and_restrict(regex_config->regex_ignore, NULL, str_test);
+
+    assert_true(ret);
+}
+
+void check_ignore_and_restrict_not_restricted(void ** state) {
+    logreader *regex_config = *state;
+    w_expression_t * expression_restrict;
+    char *str_test = "testing log with restrict word";
+    char *aux[2];
+    aux[0] = str_test;
+    aux[1] = str_test+1;
+
+    expect_function_call_any(__wrap_pthread_rwlock_wrlock);
+    expect_function_call_any(__wrap_pthread_rwlock_unlock);
+    expect_function_call_any(__wrap_pthread_rwlock_rdlock);
+
+    w_calloc_expression_t(&expression_restrict, EXP_TYPE_PCRE2);
+    w_expression_compile(expression_restrict, "restrict.*", 0);
+    OSList_InsertData(regex_config->regex_restrict, NULL, expression_restrict);
+
+    will_return(wrap_pcre2_match_data_create_from_pattern, 1);
+    will_return(wrap_pcre2_match, 1);
+    will_return(wrap_pcre2_get_ovector_pointer, aux);
+
+    int ret = check_ignore_and_restrict(NULL, regex_config->regex_restrict, str_test);
+
+    assert_false(ret);
+}
+
+void check_ignore_and_restrict_restricted(void ** state) {
+    logreader *regex_config = *state;
+    w_expression_t * expression_restrict;
+    char *str_test = "testing log not match";
+    char log_str[PATH_MAX + 1] = {0};
+
+    expect_function_call_any(__wrap_pthread_rwlock_wrlock);
+    expect_function_call_any(__wrap_pthread_rwlock_unlock);
+
+    w_calloc_expression_t(&expression_restrict, EXP_TYPE_PCRE2);
+    w_expression_compile(expression_restrict, "restrict.*", 0);
+    OSList_InsertData(regex_config->regex_restrict, NULL, expression_restrict);
+
+    will_return(wrap_pcre2_match_data_create_from_pattern, 1);
+    will_return(wrap_pcre2_match, 0);
+
+    snprintf(log_str, PATH_MAX, LF_MATCH_REGEX, "testing log not match", "restrict", "restrict.*");
+    expect_string(__wrap__mdebug2, formatted_msg, log_str);
+
+    int ret = check_ignore_and_restrict(NULL, regex_config->regex_restrict, str_test);
+
+    assert_true(ret);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         // Test w_get_hash_context
@@ -2349,7 +2498,14 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_w_macos_release_log_execution_log_stream_and_show_not_launched, setup_process, teardown_process),
         cmocka_unit_test_setup_teardown(test_w_macos_release_log_execution_log_stream_and_show_launched_and_running, setup_process, teardown_process),
         cmocka_unit_test_setup_teardown(test_w_macos_release_log_execution_log_stream_launched_and_show_not_launched, setup_process, teardown_process),
-        cmocka_unit_test_setup_teardown(test_w_macos_release_log_execution_log_stream_not_launched_and_show_launched, setup_process, teardown_process)
+        cmocka_unit_test_setup_teardown(test_w_macos_release_log_execution_log_stream_not_launched_and_show_launched, setup_process, teardown_process),
+
+        // Test w_macos_release_log_execution
+        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_null_config, setup_regex, teardown_regex),
+        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_not_ignored, setup_regex, teardown_regex),
+        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_ignored, setup_regex, teardown_regex),
+        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_not_restricted, setup_regex, teardown_regex),
+        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_restricted, setup_regex, teardown_regex)
 
     };
 

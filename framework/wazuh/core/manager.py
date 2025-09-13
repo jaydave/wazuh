@@ -4,20 +4,41 @@
 
 import copy
 import json
+import os
 import re
 import socket
+import ssl
 from collections import OrderedDict
+from datetime import datetime
+from enum import Enum
 from os.path import exists
-from typing import Dict
+from typing import Dict, Optional, Union
 
+import aiohttp
+import certifi
+import wazuh
 from api import configuration
-from wazuh import WazuhInternalError, WazuhError, WazuhException
+from wazuh import WazuhError, WazuhException, WazuhInternalError
 from wazuh.core import common
 from wazuh.core.cluster.utils import get_manager_status
-from wazuh.core.utils import tail, get_utc_strptime
+from wazuh.core.configuration import get_active_configuration, get_cti_url
+from wazuh.core.utils import get_utc_now, get_utc_strptime, tail
 from wazuh.core.wazuh_socket import WazuhSocket
 
+
 _re_logtest = re.compile(r"^.*(?:ERROR: |CRITICAL: )(?:\[.*\] )?(.*)$")
+
+OSSEC_LOG_FIELDS = ['timestamp', 'tag', 'level', 'description']
+CTI_URL = get_cti_url()
+RELEASE_UPDATES_URL = os.path.join(CTI_URL, 'api', 'v1', 'ping')
+ONE_DAY_SLEEP = 60 * 60 * 24
+WAZUH_UID_KEY = 'wazuh-uid'
+WAZUH_TAG_KEY = 'wazuh-tag'
+
+
+class LoggingFormat(Enum):
+    plain = "plain"
+    json = "json"
 
 
 def status() -> dict:
@@ -26,37 +47,66 @@ def status() -> dict:
     return get_manager_status()
 
 
-def get_ossec_log_fields(log: str) -> tuple:
+def get_ossec_log_fields(log: str, log_format: LoggingFormat = LoggingFormat.plain) -> Union[tuple, None]:
     """Get ossec.log log fields.
 
     Parameters
     ----------
     log : str
         Log example.
+    log_format : LoggingFormat
+        Wazuh log format.
 
     Returns
     -------
-    tuple
+    tuple or None
         Log fields: timestamp, tag, level, and description.
     """
-    regex_category = re.compile(
-        r"^(\d\d\d\d/\d\d/\d\d\s\d\d:\d\d:\d\d)\s(\S+)(?:\[.*)?:\s(DEBUG|INFO|CRITICAL|ERROR|WARNING):(.*)$")
+    if log_format == LoggingFormat.plain:
+        regex_category = re.compile(
+            r"^(\d\d\d\d/\d\d/\d\d\s\d\d:\d\d:\d\d)\s(\S+)(?:\[.*)?:\s(DEBUG|INFO|CRITICAL|ERROR|WARNING):(.*)$")
 
-    match = re.search(regex_category, log)
+        match = re.search(regex_category, log)
+        if not match:
+            return None
 
-    if match:
         date = match.group(1)
         tag = match.group(2)
         level = match.group(3)
         description = match.group(4)
 
-        if "rootcheck" in tag:  # Unify rootcheck category
-            tag = "wazuh-rootcheck"
+    elif log_format == LoggingFormat.json:
+        try:
+            match = json.loads(log)
+        except json.decoder.JSONDecodeError:
+            return None
 
+        try:
+            date = match['timestamp']
+            tag = match['tag']
+            level = match['level']
+            description = match['description']
+        except KeyError:
+            return None
     else:
         return None
 
+    if "rootcheck" in tag:  # Unify rootcheck category
+        tag = "wazuh-rootcheck"
+
     return get_utc_strptime(date, '%Y/%m/%d %H:%M:%S'), tag, level.lower(), description
+
+
+def get_wazuh_active_logging_format() -> LoggingFormat:
+    """Obtain the Wazuh active logging format.
+
+    Returns
+    -------
+    LoggingFormat
+        Wazuh active log format. Can either be `plain` or `json`. If it has both types, `plain` will be returned.
+    """
+    active_logging = get_active_configuration(agent_id="000", component="com", configuration="logging")['logging']
+    return LoggingFormat.plain if active_logging['plain'] == "yes" else LoggingFormat.json
 
 
 def get_ossec_logs(limit: int = 2000) -> list:
@@ -74,8 +124,16 @@ def get_ossec_logs(limit: int = 2000) -> list:
     """
     logs = []
 
-    for line in tail(common.OSSEC_LOG, limit):
-        log_fields = get_ossec_log_fields(line)
+    log_format = get_wazuh_active_logging_format()
+    if log_format == LoggingFormat.plain and exists(common.WAZUH_LOG):
+        wazuh_log_content = tail(common.WAZUH_LOG, limit)
+    elif log_format == LoggingFormat.json and exists(common.WAZUH_LOG_JSON):
+        wazuh_log_content = tail(common.WAZUH_LOG_JSON, limit)
+    else:
+        raise WazuhInternalError(1020)
+
+    for line in wazuh_log_content:
+        log_fields = get_ossec_log_fields(line, log_format=log_format)
         if log_fields:
             date, tag, level, description = log_fields
 
@@ -208,3 +266,100 @@ def get_api_conf() -> dict:
         API configuration.
     """
     return copy.deepcopy(configuration.api_conf)
+
+
+def _get_connector() -> aiohttp.TCPConnector:
+    """Return a TCPConnector with default ssl context.
+
+    Returns
+    -------
+    aiohttp.TCPConnector
+        Instance with default ssl connector.
+    """
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    return aiohttp.TCPConnector(ssl=ssl_context)
+
+
+def get_update_information_template(
+        update_check: bool,
+        current_version: str = f"v{wazuh.__version__}",
+        last_check_date: Optional[datetime] = None
+) -> dict:
+    """Build and return a template for the update_information dict.
+
+    Parameters
+    ----------
+    update_check : bool
+        Indicates if the check is enabled or not.
+    current_version : str, optional
+        Indicates the current version of Wazuh, by default wazuh.__version__.
+    last_check_date : Optional[datetime], optional
+        Indicates the datetime of the last check, by default None.
+
+    Returns
+    -------
+    dict
+        Template with the given data.
+    """
+    return {
+        'last_check_date': last_check_date if last_check_date is not None else '',
+        'current_version': current_version,
+        'update_check': update_check,
+        'last_available_major': {},
+        'last_available_minor': {},
+        'last_available_patch': {},
+    }
+
+
+async def query_update_check_service(installation_uid: str) -> dict:
+    """Make a query to the update check service and retrieve updates information.
+
+    Parameters
+    ----------
+    installation_uid : str
+        Wazuh UID to include in the query.
+
+    Returns
+    -------
+    update_information : dict
+        Updates information.
+    """
+    current_version = f'v{wazuh.__version__}'
+    headers = {WAZUH_UID_KEY: installation_uid, WAZUH_TAG_KEY: current_version}
+
+    update_information = get_update_information_template(
+        update_check=True,
+        current_version=current_version,
+        last_check_date=get_utc_now()
+    )
+
+    update_information['uuid'] = installation_uid
+
+    async with aiohttp.ClientSession(connector=_get_connector()) as session:
+        try:
+            async with session.get(RELEASE_UPDATES_URL, headers=headers) as response:
+                response_data = await response.json()
+
+                update_information['status_code'] = response.status
+
+                if response.status == 200:
+                    if len(response_data['data']['major']):
+                        update_information['last_available_major'].update(
+                            **response_data['data']['major'][-1]
+                        )
+                    if len(response_data['data']['minor']):
+                        update_information['last_available_minor'].update(
+                            **response_data['data']['minor'][-1]
+                        )
+                    if len(response_data['data']['patch']):
+                        update_information['last_available_patch'].update(
+                            **response_data['data']['patch'][-1]
+                        )
+                else:
+                    update_information['message'] = response_data['errors']['detail']
+        except aiohttp.ClientError as err:
+            update_information.update({'message': str(err), 'status_code': 500})
+        except Exception as err:
+            update_information.update({'message': str(err), 'status_code': 500})
+
+    return update_information

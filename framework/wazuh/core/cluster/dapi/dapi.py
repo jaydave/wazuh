@@ -35,7 +35,7 @@ from wazuh.core.wazuh_socket import wazuh_sendsync
 pools = common.mp_pools.get()
 
 authentication_funcs = {'check_token', 'check_user_master', 'get_permissions', 'get_security_conf'}
-
+events_funcs = {"send_event_to_analysisd"}
 
 class DistributedAPI:
     """Represents a distributed API request."""
@@ -44,7 +44,8 @@ class DistributedAPI:
                  debug: bool = False, request_type: str = 'local_master', current_user: str = '',
                  wait_for_complete: bool = False, from_cluster: bool = False, is_async: bool = False,
                  broadcasting: bool = False, basic_services: tuple = None, local_client_arg: str = None,
-                 rbac_permissions: Dict = None, nodes: list = None, api_timeout: int = None):
+                 rbac_permissions: Dict = None, nodes: list = None, api_timeout: int = None,
+                 remove_denied_nodes: bool = False):
         """Class constructor.
 
         Parameters
@@ -81,6 +82,8 @@ class DistributedAPI:
             User who started the request
         api_timeout : int
             Timeout set in source API for the request
+        remove_denied_nodes : bool
+            Whether to remove denied (RBAC) nodes from response's failed items or not.
         """
         self.logger = logger
         self.f = f
@@ -99,9 +102,7 @@ class DistributedAPI:
         self.origin_module = 'API'
         self.nodes = nodes if nodes is not None else list()
         if not basic_services:
-            self.basic_services = ('wazuh-modulesd', 'wazuh-analysisd', 'wazuh-execd', 'wazuh-db')
-            if common.WAZUH_INSTALL_TYPE != "local":
-                self.basic_services += ('wazuh-remoted',)
+            self.basic_services = ('wazuh-modulesd', 'wazuh-analysisd', 'wazuh-execd', 'wazuh-db', 'wazuh-remoted')
         else:
             self.basic_services = basic_services
 
@@ -109,6 +110,7 @@ class DistributedAPI:
         self.local_client_arg = local_client_arg
         self.api_request_timeout = max(api_timeout, aconf.api_conf['intervals']['request_timeout']) \
             if api_timeout else aconf.api_conf['intervals']['request_timeout']
+        self.remove_denied_nodes = remove_denied_nodes
 
     def debug_log(self, message):
         """Use debug or debug2 depending on the log type.
@@ -227,16 +229,8 @@ class DistributedAPI:
             raise exception.WazuhError(1017, extra_message=extra_info)
 
     @staticmethod
-    def run_local(f, f_kwargs, logger, rbac_permissions, broadcasting, nodes, current_user, origin_module):
+    def run_local(f, f_kwargs, rbac_permissions, broadcasting, nodes, current_user, origin_module):
         """Run framework SDK function locally in another process."""
-
-        def debug_log(logger, message):
-            if logger.name == 'wazuh-api':
-                logger.debug2(message)
-            else:
-                logger.debug(message)
-
-        debug_log(logger, "Starting to execute request locally")
         common.rbac.set(rbac_permissions)
         common.broadcast.set(broadcasting)
         common.cluster_nodes.set(nodes)
@@ -244,7 +238,6 @@ class DistributedAPI:
         common.origin_module.set(origin_module)
         data = f(**f_kwargs)
         common.reset_context_cache()
-        debug_log(logger, "Finished executing request locally")
         return data
 
     async def execute_local_request(self) -> str:
@@ -270,7 +263,7 @@ class DistributedAPI:
                 self.f_kwargs[self.local_client_arg] = lc
             try:
                 if self.is_async:
-                    task = self.run_local(self.f, self.f_kwargs, self.logger, self.rbac_permissions, self.broadcasting,
+                    task = self.run_local(self.f, self.f_kwargs, self.rbac_permissions, self.broadcasting,
                                           self.nodes, self.current_user, self.origin_module)
 
                 else:
@@ -279,19 +272,22 @@ class DistributedAPI:
                         pool = pools.get('thread_pool')
                     elif self.f.__name__ in authentication_funcs:
                         pool = pools.get('authentication_pool')
+                    elif self.f.__name__ in events_funcs:
+                        pool = pools.get('events_pool')
                     else:
                         pool = pools.get('process_pool')
 
                     task = loop.run_in_executor(pool, partial(self.run_local, self.f, self.f_kwargs,
-                                                              self.logger, self.rbac_permissions,
-                                                              self.broadcasting, self.nodes,
+                                                              self.rbac_permissions, self.broadcasting, self.nodes,
                                                               self.current_user, self.origin_module))
                 try:
+                    self.debug_log("Starting to execute request locally")
                     data = await asyncio.wait_for(task, timeout=timeout)
+                    self.debug_log("Finished executing request locally")
                 except asyncio.TimeoutError:
                     raise exception.WazuhInternalError(3021)
-                except OperationalError:
-                    raise exception.WazuhInternalError(2008)
+                except OperationalError as exc:
+                    raise exception.WazuhInternalError(2008, extra_message=str(exc.orig))
                 except process.BrokenProcessPool:
                     raise exception.WazuhInternalError(901)
             except json.decoder.JSONDecodeError:
@@ -416,8 +412,7 @@ class DistributedAPI:
         client = self.get_client()
         node_response = await client.execute(command=b'dapi',
                                              data=json.dumps(self.to_dict(),
-                                                             cls=c_common.WazuhJSONEncoder).encode(),
-                                             wait_for_complete=self.wait_for_complete)
+                                                             cls=c_common.WazuhJSONEncoder).encode())
         return json.loads(node_response,
                           object_hook=c_common.as_wazuh_object)
 
@@ -464,8 +459,8 @@ class DistributedAPI:
                                                              "{} {}".format(node_name,
                                                                             json.dumps(kcopy,
                                                                                        cls=c_common.WazuhJSONEncoder)
-                                                                            ).encode(),
-                                                             self.wait_for_complete),
+                                                                            ).encode()
+                                                             ),
                                         object_hook=c_common.as_wazuh_object)
                 except WazuhClusterError as e:
                     if e.code == 3022:
@@ -569,7 +564,8 @@ class DistributedAPI:
         if isinstance(response, wresults.AffectedItemsWazuhResult):
             for failed in copy(allowed_nodes.failed_items):
                 # Avoid errors coming from 'unknown' node (they are included in the forward)
-                if allowed_nodes.failed_items[failed] == {'unknown'}:
+                if allowed_nodes.failed_items[failed] == {'unknown'} or \
+                        (failed.code == 4000 and self.remove_denied_nodes):
                     del allowed_nodes.failed_items[failed]
             response.add_failed_items_from(allowed_nodes)
 

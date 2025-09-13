@@ -162,9 +162,9 @@ def test_WazuhDBQuerySCACheck_parse_select_filter(mock_exists, mock_get_basic_in
         wdbq_sca_check._parse_select_filter(['test'])
     except WazuhError as e:
         assert e.code == 1724
-        assert ", ".join(
-            set(wdbq_sca_check.fields.keys()).union(core_sca.SCA_CHECK_COMPLIANCE_DB_FIELDS.keys()).union(
-                core_sca.SCA_CHECK_RULES_DB_FIELDS.keys()) - {'id_check'}) in e.message
+        expected_fields = set(wdbq_sca_check.fields.keys()).union(core_sca.SCA_CHECK_COMPLIANCE_DB_FIELDS.keys()).union(
+            core_sca.SCA_CHECK_RULES_DB_FIELDS.keys()) - {'id_check'}
+        assert all(field in e.message for field in expected_fields)
 
 
 @pytest.mark.parametrize('query', [
@@ -195,6 +195,24 @@ def test_WazuhDBQuerySCACheckIDs__init__(mock_wdbqsca, query):
                                          fields=expected_fields, default_sort_field='id', default_sort_order='ASC',
                                          query=f"policy_id=test_policy_id;{query}" if query
                                          else "policy_id=test_policy_id")
+
+
+@pytest.mark.parametrize('field, value, expected', [
+    ('condition', 'all', False),
+    ('condition', 'none', False),
+    ('condition', 'any', False),
+    ('rationale', 'all', True),
+    ('description', 'none', False),
+])
+@patch('wazuh.core.utils.WazuhDBBackend.__init__', return_value=None)
+@patch('wazuh.core.agent.Agent.get_basic_information')
+def test_WazuhDBQuerySCACheckIDs_protected_pass_filter(mock_get_basic_info, mock_backend, field, value, expected):
+    """Test WazuhDBQuerySCACheckIDs._pass_filter function."""
+    query = core_sca.WazuhDBQuerySCACheckIDs(agent_id='000', offset=10, limit=20, filters={'test': 'value'},
+                                     search={'value': 'test'}, query='', policy_id='test_policy_id', sort={})
+
+    skipped = query._pass_filter(field, value)
+    assert skipped == expected
 
 
 @pytest.mark.parametrize('sca_checks_test_list', [

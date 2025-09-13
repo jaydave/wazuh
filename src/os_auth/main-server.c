@@ -72,7 +72,6 @@ extern struct keynode * volatile *remove_tail;
 pthread_mutex_t mutex_keys = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond_pending = PTHREAD_COND_INITIALIZER;
 
-
 /* Print help statement */
 static void help_authd(char * home_path)
 {
@@ -152,8 +151,12 @@ int main(int argc, char **argv)
     /* Initialize some variables */
     bio_err = 0;
 
-    // Get options
+    /* Change working directory */
+    if (chdir(home_path) == -1) {
+        merror_exit(CHDIR_ERROR, home_path, errno, strerror(errno));
+    }
 
+    // Get options
     {
         int c;
         int use_pass = 0;
@@ -232,7 +235,12 @@ int main(int argc, char **argv)
                     if (!optarg) {
                         merror_exit("-%c needs an argument", c);
                     }
-                    ciphers = optarg;
+                    else {
+                        if (w_str_is_number(optarg)) {
+                            merror_exit("-%c needs a valid list of SSL ciphers", c);
+                        }
+                        ciphers = optarg;
+                    }
                     break;
 
                 case 'v':
@@ -281,9 +289,14 @@ int main(int argc, char **argv)
                         merror_exit("-%c needs an argument", c);
                     }
 
-                    generate_certificate = true;
-                    if (snprintf(cert_val, OS_SIZE_32 + 1, "%s", optarg) > OS_SIZE_32) {
-                        mwarn("-%c argument exceeds %d bytes. Certificate validity info truncated", c, OS_SIZE_32);
+                    if (w_str_is_number(optarg)) {
+                        generate_certificate = true;
+                        if (snprintf(cert_val, OS_SIZE_32 + 1, "%s", optarg) > OS_SIZE_32) {
+                            mwarn("-%c argument exceeds %d bytes. Certificate validity info truncated", c, OS_SIZE_32);
+                        }
+                    }
+                    else {
+                        merror_exit("-%c needs a numeric argument", c);
                     }
                     break;
 
@@ -292,9 +305,14 @@ int main(int argc, char **argv)
                         merror_exit("-%c needs an argument", c);
                     }
 
-                    generate_certificate = true;
-                    if (snprintf(cert_key_bits, OS_SIZE_32 + 1, "%s", optarg) > OS_SIZE_32) {
-                        mwarn("-%c argument exceeds %d bytes. Certificate key size info truncated", c, OS_SIZE_32);
+                    if (w_str_is_number(optarg)) {
+                        generate_certificate = true;
+                        if (snprintf(cert_key_bits, OS_SIZE_32 + 1, "%s", optarg) > OS_SIZE_32) {
+                            mwarn("-%c argument exceeds %d bytes. Certificate key size info truncated", c, OS_SIZE_32);
+                        }
+                    }
+                    else {
+                        merror_exit("-%c needs a numeric argument", c);
                     }
                     break;
 
@@ -373,11 +391,6 @@ int main(int argc, char **argv)
             } else {
                 merror_exit("Unable to generate auth certificates.");
             }
-        }
-
-        /* Change working directory */
-        if (chdir(home_path) == -1) {
-            merror_exit(CHDIR_ERROR, home_path, errno, strerror(errno));
         }
 
         /* Set the Debug level */
@@ -501,7 +514,7 @@ int main(int argc, char **argv)
     minfo(STARTUP_MSG, (int)getpid());
 
     /* Checking client keys file */
-    fp = fopen(KEYS_FILE, "a");
+    fp = wfopen(KEYS_FILE, "a");
     if (!fp) {
         merror("Unable to open %s (key file)", KEYS_FILE);
         exit(1);
@@ -523,11 +536,20 @@ int main(int argc, char **argv)
 
         /* Check if password is enabled */
         if (config.flags.use_password) {
-            fp = fopen(AUTHD_PASS, "r");
+            fp = wfopen(AUTHD_PASS, "r");
             buf[0] = '\0';
 
             /* Checking if there is a custom password file */
             if (fp) {
+                fseek(fp, 0, SEEK_END);
+
+                if (ftell(fp) <= 1) {
+                    merror("Empty password provided.");
+                    exit(1);
+                }
+
+                fseek(fp, 0, SEEK_SET);
+
                 buf[4096] = '\0';
                 char *ret = fgets(buf, 4095, fp);
 
@@ -1008,16 +1030,14 @@ void* run_writer(__attribute__((unused)) void *arg) {
         }
 
         for (cur = copy_remove; cur; cur = next) {
-            char full_name[FILE_SIZE + 1];
             next = cur->next;
-            snprintf(full_name, sizeof(full_name), "%s-%s", cur->name, cur->ip);
 
             mdebug1("[Writer] Performing delete([%s] %s).", cur->id, cur->name);
 
             gettime(&t0);
-            delete_agentinfo(cur->id, full_name);
+            delete_diff(cur->name);
             gettime(&t1);
-            mdebug2("[Writer] delete_agentinfo(): %d µs.", (int)(1000000. * (double)time_diff(&t0, &t1)));
+            mdebug2("[Writer] delete_diff(): %d µs.", (int)(1000000. * (double)time_diff(&t0, &t1)));
 
             gettime(&t0);
             OS_RemoveCounter(cur->id);

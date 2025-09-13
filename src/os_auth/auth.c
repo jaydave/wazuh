@@ -19,6 +19,10 @@
 
 #ifdef WAZUH_UNIT_TESTING
 #define static
+
+// Redefine ossec_version
+#undef __ossec_version
+#define __ossec_version "v4.5.0"
 #endif
 
 keystore keys;
@@ -123,13 +127,42 @@ w_err_t w_auth_parse_data(const char* buf,
         return OS_INVALID;
     }
 
+    /* Check for valid agent version */
+    const char * agent_version_token = " V:";
+    if (strncmp(buf, agent_version_token, 3) == 0) {
+        char version[OS_BUFFER_SIZE+1] = {0};
+        sscanf(buf," V:\'%2048[^\']\"",version);
+
+        /* Validate the version */
+        if (buf[strlen(version) + 4] != '\'') {
+            merror("Unterminated version field");
+            snprintf(response, OS_SIZE_2048, "ERROR: Unterminated version field");
+            return OS_INVALID;
+        }
+
+        if (!config.allow_higher_versions && compare_wazuh_versions(__ossec_version, version, false) < 0) {
+            merror("Incompatible version for new agent from: %s", ip);
+            snprintf(response, OS_SIZE_2048, "ERROR: %s", HC_INVALID_VERSION_RESPONSE);
+            return OS_INVALID;
+        }
+
+        /* Forward the string pointer V:'........' 3 for " V:", 2 for '' */
+        buf += strlen(version) + 5;
+    }
+
     /* Check for valid centralized group */
-    char centralized_group_token[2] = "G:";
-    if (strncmp(++buf, centralized_group_token, 2) == 0) {
+    const char * centralized_group_token = " G:";
+    if (strncmp(buf, centralized_group_token, 3) == 0) {
         char tmp_groups[OS_SIZE_65536+1] = {0};
         sscanf(buf," G:\'%65536[^\']\"",tmp_groups);
 
         /* Validate the group name */
+        if (buf[strlen(tmp_groups) + 4] != '\'') {
+            merror("Unterminated group field");
+            snprintf(response, OS_SIZE_2048, "ERROR: Unterminated group field");
+            return OS_INVALID;
+        }
+
         if (0 > w_validate_group_name(tmp_groups, response)) {
             merror("Invalid group name: %.255s... ,",tmp_groups);
             return OS_INVALID;
@@ -141,20 +174,23 @@ w_err_t w_auth_parse_data(const char* buf,
         }
         mdebug1("Group(s) is: %s",*groups);
 
-        /*Forward the string pointer G:'........' 2 for G:, 2 for ''*/
-        buf+= 2+strlen(tmp_groups)+2;
-
-    } else {
-        buf--;
+        /* Forward the string pointer G:'........' 3 for " G:", 2 for '' */
+        buf += strlen(tmp_groups) + 5;
     }
 
     /* Check for IP when client uses -i option */
     char client_source_ip[IPSIZE + 1] = {0};
-    char client_source_ip_token[3] = "IP:";
-    if (strncmp(++buf, client_source_ip_token, 3) == 0) {
+    const char * client_source_ip_token = " IP:";
+    if (strncmp(buf, client_source_ip_token, 4) == 0) {
         char format[15];
-        sprintf(format, " IP:\'%%%d[^\']\"", IPSIZE);
+        sprintf(format, " IP:\'%%%d[^\' ]\"", IPSIZE);
         sscanf(buf, format, client_source_ip);
+
+        if (buf[strlen(client_source_ip) + 5] != '\'') {
+            merror("Unterminated IP field");
+            snprintf(response, OS_SIZE_2048, "ERROR: Unterminated IP field");
+            return OS_INVALID;
+        }
 
         /* If IP: != 'src' overwrite the provided ip */
         if (strncmp(client_source_ip,"src",3) != 0) {
@@ -170,10 +206,9 @@ w_err_t w_auth_parse_data(const char* buf,
             w_free_os_ip(aux_ip);
         }
 
-        /* Forward the string pointer IP:'........' 3 for IP: , 2 for '' */
-        buf+= 3 + strlen(client_source_ip) + 2;
+        /* Forward the string pointer IP:'........' 4 for " IP:", 2 for '' */
+        buf += strlen(client_source_ip) + 6;
     } else {
-        buf--;
         if (!config.flags.use_source_ip) {
             // use_source-ip = 0 and no -I argument in agent
             snprintf(ip, IPSIZE, "any");
@@ -181,12 +216,18 @@ w_err_t w_auth_parse_data(const char* buf,
     }
 
     /* Check for key hash when the agent already has one*/
-    char key_hash_token[2] = "K:";
-    if (strncmp(++buf, key_hash_token, 2) == 0) {
+    const char * key_hash_token = " K:";
+    if (strncmp(buf, key_hash_token, 3) == 0) {
         os_calloc(1, sizeof(os_sha1), *key_hash);
         char format[15] = {0};
         sprintf(format, " K:\'%%%ld[^\']\"", sizeof(os_sha1) - 1);
         sscanf(buf, format, *key_hash);
+
+        if (buf[strlen(*key_hash) + 4] != '\'') {
+            merror("Unterminated key field");
+            snprintf(response, OS_SIZE_2048, "ERROR: Unterminated key field");
+            return OS_INVALID;
+        }
     }
 
     return OS_SUCCESS;

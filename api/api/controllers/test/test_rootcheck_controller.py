@@ -1,3 +1,7 @@
+# Copyright (C) 2015, Wazuh Inc.
+# Created by Wazuh, Inc. <info@wazuh.com>.
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import sys
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -81,7 +85,7 @@ async def test_get_rootcheck_agent(mock_exc, mock_dapi, mock_remove, mock_dfunc,
                 'search': None,
                 'select': None,
                 'q': '',
-                'distinct': None,
+                'distinct': False,
                 'filters': {
                     'status': 'all',
                     'pci_dss': None,

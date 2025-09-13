@@ -1,3 +1,7 @@
+# Copyright (C) 2015, Wazuh Inc.
+# Created by Wazuh, Inc. <info@wazuh.com>.
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import importlib
 import json
 import logging
@@ -6,7 +10,9 @@ import socket
 import sys
 from datetime import datetime
 from hashlib import md5
-from unittest.mock import call, patch, MagicMock
+from unittest.mock import call, patch, MagicMock, PropertyMock
+
+from typing import Optional
 
 import pytest
 import pytz
@@ -26,7 +32,7 @@ PRESENT_DATE = "2022-06-15T12:00:00.000000Z"
 FUTURE_DATE = "2022-12-31T12:00:00.000000Z"
 
 
-def create_mocked_blob(blob_name: str, last_modified: datetime = None):
+def create_mocked_blob(blob_name: str, last_modified: datetime = None, content_length: Optional[int] = None):
     """Return a fake blob with name and creation time.
 
     Parameters:
@@ -35,6 +41,8 @@ def create_mocked_blob(blob_name: str, last_modified: datetime = None):
         The name of the fake blob.
     last_modified : str
         The last modified time property of the fake blob. datetime.now() will be used if no creation_time is provided.
+    content_length: Optional[int]
+        The content_length property of the fake blob. This property is only set if the length is not None
 
     Returns
     -------
@@ -44,6 +52,11 @@ def create_mocked_blob(blob_name: str, last_modified: datetime = None):
     blob = MagicMock()
     blob.name = blob_name
     blob.properties.last_modified = (last_modified if last_modified else datetime.now()).replace(tzinfo=pytz.UTC)
+
+    # Add Blob length property
+    if not (content_length is None):
+        type(blob.properties).content_length = PropertyMock(return_value=content_length)
+
     return blob
 
 
@@ -216,21 +229,20 @@ def test_create_new_row_ko(mock_add_row, mock_logging):
     mock_logging.assert_called_once()
 
 
-@pytest.mark.parametrize('auth_path, la_id, key, offset, query, workspace', [
-    (None, "client", "secret", "1d", "query", "workspace"),
-    ("/var/ossec/", None, None, "", "", ""),
+@pytest.mark.parametrize('auth_path, offset, query, workspace', [
+    ("/var/ossec/", "1d", "query", "workspace"),
 ])
 @patch('azure-logs.get_log_analytics_events')
 @patch('azure-logs.build_log_analytics_query')
 @patch('azure-logs.get_token')
 @patch('azure-logs.read_auth_file')
-def test_start_log_analytics(mock_auth, mock_token, mock_build, mock_get_logs, auth_path, la_id, key, offset, query,
-                             workspace):
+def test_start_log_analytics(mock_auth, mock_token, mock_build, mock_get_logs, auth_path, offset, query, workspace):
     """Test start_log_analytics reads the credentials, obtains a token, builds the query using that token and attempts
     to get the log analytics logs."""
     tenant = "tenant"
-    azure.args = MagicMock(la_tenant_domain=tenant, la_auth_path=auth_path, la_id=la_id, la_key=key, la_query=query,
-                           la_time_offset=offset, workspace=workspace)
+    azure.args = MagicMock(
+        la_tenant_domain=tenant, la_auth_path=auth_path, la_query=query, la_time_offset=offset, workspace=workspace
+    )
 
     mock_auth.return_value = credentials = ("client", "secret")
     mock_token.return_value = token = "token"
@@ -350,7 +362,7 @@ def test_get_log_analytics_events(mock_get, mock_position, mock_iter, mock_updat
     body = "body"
     headers = "headers"
     azure.get_log_analytics_events(url=url, body=body, headers=headers, md5_hash="")
-    mock_get.assert_called_with(url, params=body, headers=headers)
+    mock_get.assert_called_with(url, params=body, headers=headers, timeout=10)
     if rows is None or (len(rows) > 0 and time_position is None):
         mock_logging.assert_called_once()
     elif len(rows) == 0:
@@ -401,19 +413,19 @@ def test_iter_log_analytics_events(mock_send):
     mock_send.assert_has_calls(expected_calls)
 
 
-@pytest.mark.parametrize('auth_path, graph_id, key, offset, query', [
-    (None, "client", "secret", "1d", "query"),
-    ("/var/ossec/", None, None, "", ""),
+@pytest.mark.parametrize('auth_path, offset, query', [
+    ("/var/ossec/", "1d", "query"),
 ])
 @patch('azure-logs.get_graph_events')
 @patch('azure-logs.build_graph_url')
 @patch('azure-logs.get_token')
 @patch('azure-logs.read_auth_file')
-def test_start_graph(mock_auth, mock_token, mock_build, mock_graph, auth_path, graph_id, key, offset, query):
+def test_start_graph(mock_auth, mock_token, mock_build, mock_graph, auth_path, offset, query):
     """Test start_graph attempts to process the logs available for the given authentication, query and offset values."""
     tenant = "tenant"
-    azure.args = MagicMock(graph_tenant_domain=tenant, graph_auth_path=auth_path, graph_id=graph_id, graph_key=key,
-                           graph_time_offset=offset, graph_query=query)
+    azure.args = MagicMock(
+        graph_tenant_domain=tenant, graph_auth_path=auth_path, graph_time_offset=offset, graph_query=query
+    )
     mock_auth.return_value = credentials = ("client", "secret")
     mock_token.return_value = token = "token"
     mock_build.return_value = url = "url"
@@ -533,7 +545,7 @@ def test_get_graph_events(mock_get, mock_update, mock_send):
 
     headers = "headers"
     azure.get_graph_events(url=url, headers=headers, md5_hash="")
-    mock_get.assert_called_with(url=url, headers=headers)
+    mock_get.assert_called_with(url=url, headers=headers, timeout=10)
     assert mock_update.call_count == num_events
     assert mock_send.call_count == num_events
 
@@ -553,23 +565,20 @@ def test_get_graph_events_error_responses(mock_get, mock_logging, status_code):
         response_mock.raise_for_status.assert_called_once()
 
 
-@pytest.mark.parametrize('auth_path, name, key, container_name', [
-    (None, "name", "key", "container"),
-    ("/var/ossec/", "", "", "*"),
+@pytest.mark.parametrize('auth_path, container_name', [
+    ("/var/ossec/", "*"),
 ])
 @patch('azure-logs.get_blobs')
 @patch('azure-logs.create_new_row')
 @patch('azure-logs.orm.get_row', return_value=None)
 @patch('azure-logs.BlockBlobService')
 @patch('azure-logs.read_auth_file')
-def test_start_storage(mock_auth, mock_blob, mock_get_row, mock_create, mock_get_blobs, auth_path, name, key,
-                       container_name):
+def test_start_storage(mock_auth, mock_blob, mock_get_row, mock_create, mock_get_blobs, auth_path, container_name):
     """Test start_storage process blobs in bucket as expected."""
     offset = "1d"
-    azure.args = MagicMock(storage_auth_path=auth_path, account_name=name, account_key=key, container=container_name,
-                           storage_time_offset=offset)
+    azure.args = MagicMock(storage_auth_path=auth_path, container=container_name, storage_time_offset=offset)
     mock_create.return_value = MagicMock(min_processed_date=PRESENT_DATE, max_processed_date=PRESENT_DATE)
-    mock_auth.return_value = (name, key)
+    mock_auth.return_value = ("name", "key")
     m = MagicMock()
     m.list_containers.return_value = [MagicMock(name=container_name)]
     mock_blob.return_value = m
@@ -580,10 +589,10 @@ def test_start_storage(mock_auth, mock_blob, mock_get_row, mock_create, mock_get
     else:
         mock_auth.assert_not_called()
 
-    md5_hash = md5(name.encode()).hexdigest()
-    mock_blob.assert_called_with(account_name=name, account_key=key)
+    md5_hash = md5("name".encode()).hexdigest()
+    mock_blob.assert_called_with(account_name="name", account_key="key")
     mock_get_row.assert_called_with(azure.orm.Storage, md5=md5_hash)
-    mock_create.assert_called_with(table=azure.orm.Storage, query=name, md5_hash=md5_hash, offset=offset)
+    mock_create.assert_called_with(table=azure.orm.Storage, query="name", md5_hash=md5_hash, offset=offset)
     mock_get_blobs.assert_called_once()
 
 
@@ -708,6 +717,37 @@ def test_get_blobs(mock_send, mock_update, blob_date, min_date, max_date, desire
         assert mock_update.call_count == len(blob_list) if not extension else len(
             [blob.name for blob in blob_list if extension in blob.name])
 
+@patch('azure-logs.logging.debug')
+def test_that_empty_blobs_are_omitted(mock_logging):
+    """Test get_blobs checks the size of the blob and omits it if is is empty"""
+    azure.args = MagicMock(blobs=None, json_file=False, json_inline=False, reparse=False)
+
+    # List of empty blobs to use
+    list_of_empty_blobs = [
+        create_mocked_blob("Example1", content_length=0),
+        create_mocked_blob("Example2", content_length=0)
+    ]
+
+    iterator_with_marker = MagicMock(next_marker=None)
+    iterator_with_marker.__iter__.return_value = list_of_empty_blobs
+
+    # Mock for the blob service
+    blob_service = MagicMock()
+    blob_service.list_blobs.return_value = iterator_with_marker
+
+    container_name = "container"
+    marker = "marker"
+    md5_hash = "hash"
+    azure.get_blobs(container_name=container_name, blob_service=blob_service, md5_hash=md5_hash, next_marker=marker,
+                    min_datetime=parse(PRESENT_DATE), max_datetime=parse(FUTURE_DATE),
+                    desired_datetime=parse(FUTURE_DATE))
+
+    # for blob in list_of_empty_blobs:
+    #     blob.properties.content_length.assert_called()
+    expected_calls = [call("Empty blob Example1, skipping"), call("Empty blob Example2, skipping")]
+    mock_logging.assert_has_calls(expected_calls, any_order=False)
+    blob_service.get_blob_to_text.assert_not_called()
+
 
 @patch('azure-logs.update_row_object')
 @patch('azure-logs.send_message')
@@ -818,7 +858,7 @@ def test_get_token(mock_post):
     mock_post.return_value = m
     token = azure.get_token(client_id, secret, domain, scope)
     auth_url = f'{azure.URL_LOGGING}/{domain}/oauth2/v2.0/token'
-    mock_post.assert_called_with(auth_url, data=body)
+    mock_post.assert_called_with(auth_url, data=body, timeout=10)
     assert token == expected_token
 
 

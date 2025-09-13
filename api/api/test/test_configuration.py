@@ -3,7 +3,7 @@
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import copy
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -22,7 +22,7 @@ custom_api_configuration = {
         "cert": "server.crt",
         "use_ca": False,
         "ca": "ca.crt",
-        "ssl_protocol": "TLSv1.2",
+        "ssl_protocol": "auto",
         "ssl_ciphers": ""
     },
     "logs": {
@@ -54,6 +54,11 @@ custom_api_configuration = {
             "wodle_command": {
                 "allow": True,
                 "exceptions": []
+            }
+        },
+        "agents": {
+            "allow_higher_versions": {
+                "allow": True
             }
         }
     }
@@ -136,6 +141,7 @@ def test_read_configuration(mock_open, mock_exists, read_config):
     {'remote_commands': {'wodle_command': {'enabled': 'invalid_type'}}},
     {'remote_commands': {'wodle_command': {'exceptions': [0, 1, 2]}}},
     {'remote_commands': {'wodle_command': {'invalid_subkey': 'invalid_type'}}},
+    {'agents': {'allowed_higher_versions': {'allow': []}}},
 ])
 @patch('os.path.exists', return_value=True)
 def test_read_wrong_configuration(mock_exists, config):
@@ -148,6 +154,24 @@ def test_read_wrong_configuration(mock_exists, config):
             m.return_value = config
             with pytest.raises(api_exception.APIError, match=r'\b2000\b'):
                 configuration.read_yaml_config()
+
+
+@pytest.mark.parametrize('config, expected_msg', [
+    ({}, False),
+    ({'cache': {}}, False),
+    ({'cache': {'enabled': True}}, True),
+    ({'cache': {'enabled': False}}, False)
+])
+@patch('os.path.exists', return_value=True)
+def test_read_cache_configuration(mock_exists, config, expected_msg):
+    """Verify that expected warning is logged when reading the cace API option configuration"""
+    with patch('api.configuration.yaml.safe_load') as m, patch('logging.Logger.warning') as mock_logger, \
+            patch('builtins.open'):
+        m.return_value = config
+        configuration.read_yaml_config()
+
+        if expected_msg:
+            mock_logger.assert_called_once_with(configuration.CACHE_DEPRECATED_MESSAGE.format(release="4.8.0"))
 
 
 @patch('os.chmod')
@@ -170,3 +194,32 @@ def test_generate_self_signed_certificate(mock_open, mock_chmod):
 
     assert mock_open.call_count == 2, 'Not expected number of calls'
     assert mock_chmod.call_count == 2, 'Not expected number of calls'
+
+
+def test_fill_dict():
+    """Verify that the function `fill_dict` returns a valid updated API configuration based on the user one."""
+    user_configuration = {
+        'port': 55555,
+        'https': {
+            'use_ca': True
+        }
+    }
+
+    updated_configuration = configuration.fill_dict(configuration.default_api_configuration, user_configuration,
+                                                    configuration.api_config_schema)
+    # Assert that the user configuration has been applied
+    assert updated_configuration['port'] == user_configuration['port']
+    assert updated_configuration['https']['use_ca'] == user_configuration['https']['use_ca']
+
+    # Revert the custom user values to check if the rest had been set to default values
+    updated_configuration['port'] = configuration.default_api_configuration['port']
+    updated_configuration['https']['use_ca'] = configuration.default_api_configuration['https']['use_ca']
+
+    assert updated_configuration == configuration.default_api_configuration
+
+
+def test_fill_dict_exceptions():
+    """Verify that invalid user configurations will raise the expected exception."""
+    with pytest.raises(api_exception.APIError, match="2000 .*"):
+        configuration.fill_dict(configuration.default_api_configuration, {"invalid": "configuration"},
+                                configuration.api_config_schema)

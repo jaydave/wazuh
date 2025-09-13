@@ -40,12 +40,12 @@ info:
 
     <SecurityDefinitions />
 
-  version: '4.5.0'
-  x-revision: '40500'
+  version: '5.0.0'
+  x-revision: '50000'
   title: 'Wazuh API REST'
   license:
     name: 'GPL 2.0'
-    url: 'https://github.com/wazuh/wazuh/blob/4.3/LICENSE'
+    url: 'https://github.com/wazuh/wazuh/blob/v5.0.0/LICENSE'
 
 servers:
   - url: '{protocol}://{host}:{port}'
@@ -521,14 +521,13 @@ x-rbac-catalog:
         actions: ['task:status']
         resources: ['*:*:*']
         effect: "deny"
-    'vulnerability:read':
-      description: "Allow reading agents' vulnerabilities information"
+    'event:ingest':
+      description: "Ingest events"
       resources:
-        - $ref: '#/x-rbac-catalog/resources/agent:id'
-        - $ref: '#/x-rbac-catalog/resources/agent:group'
+        - $ref: '#/x-rbac-catalog/resources/*:*'
       example:
-        actions: [ 'vulnerability:read' ]
-        resources: [ 'agent:id:011', 'agent:group:us-west' ]
+        actions: ['event:ingest']
+        resources: ['*:*:*']
         effect: "allow"
 
 components:
@@ -556,7 +555,7 @@ components:
             detail: "Permission denied: Resource type: *:*"
             remediation: "Please, make sure you have permissions to execute the current request. For more information
             on how to set up permissions, please visit
-            https://documentation.wazuh.com/4.3/user-manual/api/rbac/configuration.html"
+            https://documentation.wazuh.com/5.0/user-manual/api/rbac/configuration.html"
             error: 4000
             dapi_errors:
               unknown-node:
@@ -623,7 +622,7 @@ components:
             title: "Wazuh Error"
             detail: "Maximum number of requests per minute reached"
             remediation: "This limit can be changed in api.yaml file. More information here:
-            https://documentation.wazuh.com/4.3/user-manual/api/security/configuration.html"
+            https://documentation.wazuh.com/5.0/user-manual/api/security/configuration.html"
             code: 6001
 
     ResourceNotFoundResponse:
@@ -636,7 +635,7 @@ components:
             title: "Resource Not Found"
             detail: "The group does not exist"
             remediation: "Please, use `GET /groups` to find all available groups:
-            https://documentation.wazuh.com/4.3/user-manual/api/rbac/configuration.html"
+            https://documentation.wazuh.com/5.0/user-manual/api/rbac/configuration.html"
             code: 1710
             dapi_errors:
               unknown-node:
@@ -900,19 +899,6 @@ components:
               items:
                 $ref: '#/components/schemas/GroupID'
         - $ref: '#/components/schemas/AllItemsResponse'
-
-    AllItemsResponseAgentsSimple:
-      allOf:
-        - $ref: '#/components/schemas/AllItemsResponse'
-        - type: object
-          required:
-            - affected_items
-          properties:
-            affected_items:
-              type: array
-              description: "Items that successfully applied the API call action"
-              items:
-                $ref: '#/components/schemas/AgentSimple'
 
     AllItemsResponseAgentsSynced:
       allOf:
@@ -1298,6 +1284,7 @@ components:
                   - $ref: '#/components/schemas/WazuhRemotedStats'
         - $ref: '#/components/schemas/AllItemsResponse'
 
+
     BasicInfo:
       type: object
       properties:
@@ -1360,10 +1347,6 @@ components:
           instead of a command name"
           type: string
           format: active_response_command
-        custom:
-          description: "Whether the specified command is a custom command or not"
-          type: boolean
-          default: false
         alert:
           type: object
           properties:
@@ -1374,9 +1357,17 @@ components:
         - command
 
     ## Agents models
-    ExtraAgentFields:
+    Agent:
       type: object
       properties:
+        version:
+          type: string
+          description: "Wazuh version the agent has installed"
+        id:
+          $ref: '#/components/schemas/AgentID'
+        name:
+          type: string
+          description: "Agent name used at registration process"
         status:
           $ref: '#/components/schemas/AgentStatus'
         configSum:
@@ -1429,18 +1420,16 @@ components:
             minor:
               type: string
           description: "Agent OS information"
-
-    Agent:
-      allOf:
-      - $ref: '#/components/schemas/AgentSimple'
-      - $ref: '#/components/schemas/ExtraAgentFields'
+        status_code:
+          description: "Agent connection status code"
+          type: integer
+          format: int32
+          default: 0
+          minimum: 0
+          maximum: 5
 
     AgentGroup:
       type: object
-      required:
-      - count
-      - name
-      - configSum
       properties:
         count:
           type: integer
@@ -1464,9 +1453,7 @@ components:
       properties:
         affected_items:
           type: array
-          description: "List of removed groups with the agents which belonged to it and might have been reassigned to group default"
-          items:
-            $ref: '#/components/schemas/GroupDelete'
+          description: "List of removed groups, agents belonging exclusively to the removed groups will be reassigned to group default"
 
     AgentIdKey:
       type: object
@@ -1479,18 +1466,6 @@ components:
         key:
           type: string
           format: base64
-
-    AgentSimple:
-      type: object
-      properties:
-        version:
-          type: string
-          description: "Wazuh version the agent has installed"
-        id:
-          $ref: '#/components/schemas/AgentID'
-        name:
-          type: string
-          description: "Agent name used at registration process"
 
     AgentStatus:
       type: string
@@ -1537,8 +1512,7 @@ components:
 
     AgentDistinct:
       allOf:
-        - $ref: '#/components/schemas/AgentSimple'
-        - $ref: '#/components/schemas/ExtraAgentFields'
+        - $ref: '#/components/schemas/Agent'
         - type: object
           properties:
             count:
@@ -1583,12 +1557,6 @@ components:
       minLength: 1
       description: "Group name|all"
       format: group_names_or_all
-
-    GroupDelete:
-      type: object
-      description: "Deleted group with a list of agents that were assigned to it"
-      additionalProperties:
-        type: array
 
     AgentConfiguration:
       type: object
@@ -1842,6 +1810,10 @@ components:
                                     type: integer
                                     format: int32
                                     description: "Events coming from Office365 module (this agent)"
+                                  ms-graph:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from ms-graph module (this agent)"
                                   oscap:
                                     type: integer
                                     format: int32
@@ -1870,10 +1842,6 @@ components:
                                     type: integer
                                     format: int32
                                     description: "Events coming from upgrade agent module (this agent)"
-                                  vulnerability:
-                                    type: integer
-                                    format: int32
-                                    description: "Events coming from vulnerability detector (this agent)"
                               monitor:
                                 type: integer
                                 format: int32
@@ -1992,16 +1960,6 @@ components:
               properties:
                 last_keep_alive:
                   type: string
-                last_sync_agent_groups:
-                  type: object
-                  properties:
-                    date_start_master:
-                      type: string
-                    date_end_master:
-                      type: string
-                    total_agentgroups:
-                      type: integer
-                      format: int32
                 last_sync_agentinfo:
                   type: object
                   properties:
@@ -2012,12 +1970,22 @@ components:
                     n_synced_chunks:
                       type: integer
                       format: int32
-                last_sync_agentgroups:
+                last_sync_agentgroup:
                   type: object
                   properties:
-                    date_start_master:
+                    date_start:
                       type: string
-                    date_end_master:
+                    date_end:
+                      type: string
+                    n_synced_chunks:
+                      type: integer
+                      format: int32
+                last_sync_full_agentgroup:
+                  type: object
+                  properties:
+                    date_start:
+                      type: string
+                    date_end:
                       type: string
                     n_synced_chunks:
                       type: integer
@@ -2045,8 +2013,6 @@ components:
                           type: integer
                           format: int32
                 sync_agent_info_free:
-                  type: boolean
-                sync_agent_groups_free:
                   type: boolean
                 sync_integrity_free:
                   type: boolean
@@ -2471,10 +2437,18 @@ components:
                   type: integer
                   format: int32
                   description: "Available credits to process events in the current timeframe"
+                available_credits_prev:
+                  type: integer
+                  format: int32
+                  description: "Available credits to process events in the previous timeframe"
                 events_dropped:
                   type: integer
                   format: int32
                   description: "Events discarded because the EPS limit was reached and queues were full"
+                events_dropped_not_eps:
+                  type: integer
+                  format: int32
+                  description: "Events discarded due to causes unrelated to EPS limit"
                 seconds_over_limit:
                   type: integer
                   format: int32
@@ -2569,6 +2543,10 @@ components:
                               type: integer
                               format: int32
                               description: "Events coming from Office365 module"
+                            ms-graph:
+                              type: integer
+                              format: int32
+                              description: "Events coming from ms-graph module"
                             oscap:
                               type: integer
                               format: int32
@@ -2597,10 +2575,6 @@ components:
                               type: integer
                               format: int32
                               description: "Events coming from upgrade agent module (upgrade responses)"
-                            vulnerability:
-                              type: integer
-                              format: int32
-                              description: "Events coming from vulnerability detector module"
                         monitor:
                           type: integer
                           format: int32
@@ -2689,6 +2663,10 @@ components:
                               type: integer
                               format: int32
                               description: "Events discarded from Office365 module because the queue was full"
+                            ms-graph:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from ms-graph module because the queue was full"
                             oscap:
                               type: integer
                               format: int32
@@ -2717,10 +2695,6 @@ components:
                               type: integer
                               format: int32
                               description: "Events discarded from upgrade agent module because the queue was full"
-                            vulnerability:
-                              type: integer
-                              format: int32
-                              description: "Events discarded from vulnerability detector module because the queue was full"
                         monitor:
                           type: integer
                           format: int32
@@ -3017,6 +2991,12 @@ components:
                                 fim_registry:
                                   type: integer
                                   format: int32
+                                fim_registry_key:
+                                  type: integer
+                                  format: int32
+                                fim_registry_value:
+                                  type: integer
+                                  format: int32
                                 syscheck:
                                   type: integer
                                   format: int32
@@ -3080,12 +3060,6 @@ components:
                                     process:
                                       type: integer
                                       format: int32
-                            vulnerability:
-                              type: object
-                              properties:
-                                vuln_cves:
-                                  type: integer
-                                  format: int32
                     global:
                       type: integer
                       format: int32
@@ -3343,6 +3317,12 @@ components:
                                 fim_registry:
                                   type: integer
                                   format: int32
+                                fim_registry_key:
+                                  type: integer
+                                  format: int32
+                                fim_registry_value:
+                                  type: integer
+                                  format: int32
                                 syscheck:
                                   type: integer
                                   format: int32
@@ -3406,12 +3386,6 @@ components:
                                     process:
                                       type: integer
                                       format: int32
-                            vulnerability:
-                              type: object
-                              properties:
-                                vuln_cves:
-                                  type: integer
-                                  format: int32
                     global:
                       type: integer
                       format: int32
@@ -3645,9 +3619,6 @@ components:
         version:
           type: string
           description: "Wazuh version"
-        compilation_date:
-          type: string
-          format: date-time
         type:
           type: string
           description: "Wazuh installation type"
@@ -3882,7 +3853,7 @@ components:
           type: number
           format: float
           description: "Same as `alerts_written` but focusing in [FTS alerts]
-          (https://documentation.wazuh.com/4.3/user-manual/ruleset/ruleset-xml-syntax/decoders.html?highlight=fts
+          (https://documentation.wazuh.com/5.0/user-manual/ruleset/ruleset-xml-syntax/decoders.html?highlight=fts
           #fts)"
         hostinfo_queue_size:
           type: number
@@ -4081,6 +4052,8 @@ components:
     WazuhLogsSummary:
       type: object
       properties:
+          indexer-connector:
+            $ref: '#/components/schemas/LogSummary'
           wazuh-agentlessd:
             $ref: '#/components/schemas/LogSummary'
           wazuh-analysisd:
@@ -4105,7 +4078,7 @@ components:
             $ref: '#/components/schemas/LogSummary'
           wazuh-reportd:
             $ref: '#/components/schemas/LogSummary'
-          wazuh-rootcheck:
+          rootcheck:
             $ref: '#/components/schemas/LogSummary'
           wazuh-syscheckd:
             $ref: '#/components/schemas/LogSummary'
@@ -4127,6 +4100,8 @@ components:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:command:
             $ref: '#/components/schemas/LogSummary'
+          wazuh-modulesd:content_manager:
+            $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:database:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:docker-listener:
@@ -4139,7 +4114,7 @@ components:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:syscollector:
             $ref: '#/components/schemas/LogSummary'
-          wazuh-modulesd:vulnerability-detector:
+          wazuh-modulesd:vulnerability-scanner:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:task-manager:
             $ref: '#/components/schemas/LogSummary'
@@ -4255,6 +4230,97 @@ components:
           nullable: true
           format: date-time
           description: "Date when the latest scan started. If no scans have been run, null will be returned"
+
+    NewVersions:
+      type: object
+      properties:
+        last_check_date:
+          type: string
+          description: "Datetime of the last query to the CTI service"
+        current_version:
+          type: string
+          description: "Current version in the format vX.Y.Z"
+        update_check:
+          type: boolean
+          description: "Flag that indicates if the service is enabled"
+        last_available_major:
+          type: object
+          description: "Information about the most recent available major update"
+          properties:
+            tag:
+              type: string
+              description: "Version in the format vX.Y.Z"
+            description:
+              type: string
+            title:
+              type: string
+            published_date:
+              type: string
+            semver:
+              type: object
+              properties:
+                major:
+                  type: integer
+                  format: int32
+                minor:
+                  type: integer
+                  format: int32
+                patch:
+                  type: integer
+                  format: int32
+        last_available_minor:
+          type: object
+          description: "Information about the most recent available minor update"
+          properties:
+            tag:
+              type: string
+              description: "Version in the format vX.Y.Z"
+            description:
+              type: string
+            title:
+              type: string
+            published_date:
+              type: string
+            semver:
+              type: object
+              properties:
+                major:
+                  type: integer
+                  format: int32
+                minor:
+                  type: integer
+                  format: int32
+                patch:
+                  type: integer
+                  format: int32
+        last_available_patch:
+          type: object
+          description: "Information about the most recent available patch update"
+          properties:
+            tag:
+              type: string
+              description: "Version in the format vX.Y.Z"
+            description:
+              type: string
+            title:
+              type: string
+            published_date:
+              type: string
+            semver:
+              type: object
+              properties:
+                major:
+                  type: integer
+                  format: int32
+                minor:
+                  type: integer
+                  format: int32
+                patch:
+                  type: integer
+                  format: int32
+        uuid:
+          type: string
+          description: "Identifier of the Wazuh instance"
 
     # Rules models
     RuleFile:
@@ -4377,7 +4443,7 @@ components:
           enum:
             - passed
             - failed
-            - ""
+            - "not applicable"
         title:
           type: string
           description: "A brief description of what is being checked"
@@ -4428,6 +4494,10 @@ components:
     SyscheckDatabase:
       type: object
       properties:
+        changes:
+          type: integer
+          format: int32
+          description: "Number of changes applied"
         sha1:
           type: string
           format: hash_or_empty
@@ -4774,10 +4844,16 @@ components:
           type: string
           description: "Package format"
           enum:
+            - pacman
             - deb
             - rpm
             - win
             - pkg
+            - apk
+            - snap
+            - macports
+            - pypi
+            - npm
         multiarch:
           type: string
           description: "Whether the package has multi architecture support"
@@ -5326,7 +5402,7 @@ components:
         </tr>
         <tr>
         <td>monitor</td>
-        <td>internal</td>
+        <td>reports</td>
         <td><code>&lt;reports&gt;</code></td>
         </tr>
         <tr>
@@ -5406,13 +5482,6 @@ components:
         - wdb
         - wmodules
         - rule_test
-    cve:
-      in: query
-      name: cve
-      description: "Filter by CVE"
-      schema:
-        type: string
-        format: alphanumeric
     daemons_list:
       in: query
       name: daemons_list
@@ -6181,39 +6250,6 @@ components:
       schema:
         type: string
         format: alphanumeric
-    cve_version:
-      in: query
-      name: version
-      description: "Filter by CVE version"
-      schema:
-        type: string
-        format: alphanumeric_symbols
-    cve_status:
-      in: query
-      name: status
-      description: "Filter by CVE status"
-      schema:
-        type: string
-        enum:
-          - valid
-          - pending
-          - obsolete
-    cve_type:
-      in: query
-      name: type
-      description: "Filter by CVE type"
-      schema:
-        type: string
-        enum:
-          - os
-          - package
-    cve_severity:
-      in: query
-      name: severity
-      description: "Filter by CVE severity"
-      schema:
-        type: string
-        format: names
     wait_for_complete:
       in: query
       name: wait_for_complete
@@ -6275,6 +6311,8 @@ components:
         - socket
         - syscheck
         - syslog_output
+        - vulnerability-detection
+        - indexer
         # Wodle sections
         - aws-s3
         - azure-logs
@@ -6283,7 +6321,6 @@ components:
         - open-scap
         - osquery
         - syscollector
-        - vulnerability-detector
     field:
       in: query
       name: field
@@ -6897,6 +6934,13 @@ components:
       schema:
         type: boolean
         default: false
+    force_query:
+      in: query
+      name: force_query
+      description: "Force query to CTI service"
+      schema:
+        type: boolean
+        default: false
     file_path:
       in: query
       name: file_path
@@ -6905,7 +6949,7 @@ components:
       required: True
       schema:
         type: string
-        format: wazuh_path
+        format: wpk_path
     installer:
       in: query
       name: installer
@@ -6946,29 +6990,6 @@ components:
       schema:
         type: string
         format: alphanumeric
-    vulnerability_field:
-      in: path
-      name: field
-      description: "Vulnerability inventory field"
-      required: true
-      schema:
-        type: string
-        enum:
-        - cve
-        - name
-        - version
-        - architecture
-        - detection_time
-        - severity
-        - cvss2_score
-        - cvss3_score
-        - external_references
-        - type
-        - status
-        - condition
-        - title
-        - published
-        - updated
     xml_filename:
       in: query
       name: filename
@@ -6986,7 +7007,6 @@ components:
       schema:
         type: string
         format: xml_filename_path
-
 
 tags:
   - name: API Info
@@ -7029,8 +7049,8 @@ tags:
     description: "Syscollector information"
   - name: Tasks
     description: "Tasks information"
-  - name: Vulnerability
-    description: "Vulnerabilities information"
+  - name: Events
+    description: "Ingestion endpoints"
 
 security:
   - jwt: []
@@ -7057,10 +7077,10 @@ paths:
                     $ref: '#/components/schemas/BasicInfo'
               example:
                 title: "Wazuh API"
-                api_version: "v4.3.0"
+                api_version: "v4.5.0"
                 revision: '40100'
                 license_name: "GPL 2.0"
-                license_url: "https://github.com/wazuh/wazuh/blob/4.3/LICENSE"
+                license_url: "https://github.com/wazuh/wazuh/blob/v5.0.0/LICENSE"
                 hostname: "wazuh"
                 timestamp: "2019-04-02T08:08:11Z"
 
@@ -7206,6 +7226,7 @@ paths:
         - $ref: '#/components/parameters/ip'
         - $ref: '#/components/parameters/registerIP'
         - $ref: '#/components/parameters/group_config_status'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List of agents or error description"
@@ -7245,6 +7266,7 @@ paths:
                       version: Wazuh v4.3.0
                       node_name: worker2
                       group_config_status: "synced"
+                      status_code: 0
                     - os:
                         arch: x86_64
                         codename: Focal Fossa
@@ -7269,6 +7291,7 @@ paths:
                       version: Wazuh v4.3.0
                       node_name: worker2
                       group_config_status: "synced"
+                      status_code: 0
                     - os:
                         arch: x86_64
                         codename: Focal Fossa
@@ -7293,6 +7316,7 @@ paths:
                       version: Wazuh v4.3.0
                       node_name: worker1
                       group_config_status: "not synced"
+                      status_code: 0
                   total_affected_items: 3
                   total_failed_items: 0
                   failed_items: []
@@ -7786,6 +7810,7 @@ paths:
                                       macos: 0
                                       others: 0
                                     office365: 0
+                                    ms-graph: 0
                                     oscap: 0
                                     osquery: 0
                                     rootcheck: 1
@@ -7793,7 +7818,6 @@ paths:
                                     syscheck: 0
                                     syscollector: 0
                                     upgrade: 0
-                                    vulnerability: 0
                                   monitor: 0
                                   remote: 0
                               written_breakdown:
@@ -8251,9 +8275,7 @@ paths:
       description: "Delete all groups or a list of them"
       operationId: api.controllers.agent_controller.delete_groups
       x-rbac-actions:
-        - $ref: '#/x-rbac-catalog/actions/agent:modify_group'
         - $ref: '#/x-rbac-catalog/actions/group:delete'
-        - $ref: '#/x-rbac-catalog/actions/group:modify_assignments'
       parameters:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
@@ -8274,11 +8296,8 @@ paths:
               example:
                 data:
                   affected_items:
-                    - webserver:
-                        - '002'
-                        - '003'
-                    - dataserver:
-                        - '005'
+                    - webserver
+                    - dataserver
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
@@ -8313,6 +8332,9 @@ paths:
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/hash'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/select'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List all groups"
@@ -8423,6 +8445,7 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/statusAgentParam'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List of agents or error description"
@@ -8666,6 +8689,9 @@ paths:
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/hash'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/select'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Get group files"
@@ -8719,13 +8745,13 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
 
-  /groups/{group_id}/files/{file_name}/json:
+  /groups/{group_id}/files/{file_name}:
     get:
       tags:
         - Groups
       summary: "Get a file in group"
-      description: "Return the content of the specified group file parsed to JSON"
-      operationId: api.controllers.agent_controller.get_group_file_json
+      description: "Return the content of the specified group file"
+      operationId: api.controllers.agent_controller.get_group_file
       x-rbac-actions:
         - $ref: '#/x-rbac-catalog/actions/group:read'
       parameters:
@@ -8734,6 +8760,7 @@ paths:
         - $ref: '#/components/parameters/group_id'
         - $ref: '#/components/parameters/file_name'
         - $ref: '#/components/parameters/type_agents'
+        - $ref: '#/components/parameters/raw'
       responses:
         '200':
           description: "Get group file in json format"
@@ -8767,51 +8794,6 @@ paths:
                       checks:
                         - "f:/etc/fstab -> !r:/tmp;"
                 error: 0
-        '400':
-          $ref: '#/components/responses/ResponseError'
-        '401':
-          $ref: '#/components/responses/UnauthorizedResponse'
-        '403':
-          $ref: '#/components/responses/PermissionDeniedResponse'
-        '404':
-          $ref: '#/components/responses/ResourceNotFoundResponse'
-        '405':
-          $ref: '#/components/responses/InvalidHTTPMethodResponse'
-        '429':
-          $ref: '#/components/responses/TooManyRequestsResponse'
-
-  /groups/{group_id}/files/{file_name}/xml:
-    get:
-      tags:
-        - Groups
-      summary: "Get a file in group"
-      description: "Return the contents of the specified group file parsed to XML"
-      operationId: api.controllers.agent_controller.get_group_file_xml
-      x-rbac-actions:
-        - $ref: '#/x-rbac-catalog/actions/group:read'
-      parameters:
-        - $ref: '#/components/parameters/pretty'
-        - $ref: '#/components/parameters/wait_for_complete'
-        - $ref: '#/components/parameters/group_id'
-        - $ref: '#/components/parameters/file_name'
-        - $ref: '#/components/parameters/type_agents'
-      responses:
-        '200':
-          description: "Get group file in xml format"
-          content:
-            application/xml:
-              schema:
-                type: string
-              example: |
-                <agent_config>
-                  <!-- Shared agent configuration here -->
-                  <agent_config os="Linux">
-                    <localfile>
-                      <location>/var/log/linux.log</location>
-                      <log_format>syslog</log_format>
-                    </localfile>
-                  </agent_config>
-                </agent_config>
         '400':
           $ref: '#/components/responses/ResponseError'
         '401':
@@ -9087,6 +9069,7 @@ paths:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
       responses:
         '200':
@@ -9099,16 +9082,60 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/AllItemsResponseAgentsSimple'
+                        $ref: '#/components/schemas/AllItemsResponseAgents'
               example:
                 data:
                   affected_items:
-                    - version: Wazuh v3.0.0
-                      id: "003"
-                      name: main_database
-                    - version: Wazuh v3.0.0
-                      id: "004"
-                      name: dmz002
+                    - os:
+                        arch: x86_64
+                        codename: Focal Fossa
+                        major: '20'
+                        minor: '04'
+                        name: Ubuntu
+                        platform: ubuntu
+                        uname: Linux |ac7cb188d538 |5.8.0-45-generic |#51~20.04.1-Ubuntu SMP Tue Feb
+                          23 13:46:31 UTC 2021 |x86_64
+                        version: 20.04.2 LTS
+                      lastKeepAlive: '2024-02-26T12:40:40Z'
+                      id: '001'
+                      dateAdd: 2024-02-26T12:40:08Z
+                      configSum: ab73af41699f13fdd81903b5f23d8d00
+                      manager: wazuh-worker2
+                      group: [default]
+                      registerIP: Any
+                      ip: 172.25.0.6
+                      name: ac7cb188d538
+                      status: active
+                      mergedSum: 9a016508cea1e997ab8569f5cfab30f5
+                      version: Wazuh v3.0.0
+                      node_name: worker2
+                      group_config_status: "synced"
+                      status_code: 0
+                    - os:
+                        arch: x86_64
+                        codename: Focal Fossa
+                        major: '20'
+                        minor: '04'
+                        name: Ubuntu
+                        platform: ubuntu
+                        uname: Linux |ac7cb188d538 |5.8.0-45-generic |#51~20.04.1-Ubuntu SMP Tue Feb
+                          23 13:46:31 UTC 2021 |x86_64
+                        version: 20.04.2 LTS
+                      lastKeepAlive: '2024-02-26T12:40:40Z'
+                      id: '002'
+                      dateAdd: 2024-02-26T12:40:10Z
+                      configSum: ab73af41699f13fdd81903b5f23d8d00
+                      manager: wazuh-worker2
+                      group: [default]
+                      registerIP: Any
+                      ip: 172.25.0.11
+                      name: 91642a418627
+                      status: active
+                      mergedSum: 9a016508cea1e997ab8569f5cfab30f5
+                      version: Wazuh v3.0.0
+                      node_name: worker2
+                      group_config_status: "synced"
+                      status_code: 0
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
@@ -9215,8 +9242,8 @@ paths:
                           code: 1707
                           message: "Cannot send request, agent is not active"
                           remediation: "Please, check non-active agents connection and try again.
-                           Visit https://documentation.wazuh.com/current/user-manual/registering/index.html
-                           and https://documentation.wazuh.com/current/user-manual/agents/agent-connection.html
+                           Visit https://documentation.wazuh.com/5.0/user-manual/registering/index.html
+                           and https://documentation.wazuh.com/5.0/user-manual/agents/agent-connection.html
                            to obtain more information on registering and connecting agents"
                         id:
                           - '009'
@@ -9274,7 +9301,7 @@ paths:
                         version: "20.04.2 LTS"
                       count: 2
                     - os:
-                        version: "unknown"
+                        version: "N/A"
                       count: 1
                   total_affected_items: 3
                   total_failed_items: 0
@@ -9525,6 +9552,7 @@ paths:
         - $ref: '#/components/parameters/node_type'
         - $ref: '#/components/parameters/nodes_list'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List of connected nodes"
@@ -9542,15 +9570,15 @@ paths:
                   affected_items:
                     - name: master-node
                       type: master
-                      version: 4.3.0
+                      version: 4.4.0
                       ip: wazuh-master
                     - name: worker1
                       type: worker
-                      version: 4.3.0
+                      version: 4.4.0
                       ip: 172.26.0.7
                     - name: worker2
                       type: worker
-                      version: 4.3.0
+                      version: 4.4.0
                       ip: 172.26.0.6
                   total_affected_items: 3
                   total_failed_items: 0
@@ -9600,13 +9628,13 @@ paths:
                     - info:
                         name: master-node
                         type: master
-                        version: 4.3.0
+                        version: 4.4.0
                         ip: wazuh-master
                         n_active_agents: 5
                     - info:
                         name: worker1
                         type: worker
-                        version: 4.3.0
+                        version: 4.4.0
                         ip: 172.21.0.7
                         n_active_agents: 3
                       status:
@@ -9625,12 +9653,15 @@ paths:
                             extra_valid: 0
                             shared: 0
                         sync_agent_info_free: true
-                        sync_agent_groups_free: true
+                        last_sync_agentgroup:
+                            date_start: 2021-05-27T10:48:54.086973Z
+                            date_end: 2021-05-27T10:49:52.075794Z
+                            n_synced_chunks: 1
+                        last_sync_full_agentgroup:
+                            date_start: 2021-05-27T10:52:48.038573Z
+                            date_end: 2021-05-27T10:53:23.057795Z
+                            n_synced_chunks: 2
                         last_sync_agentinfo:
-                          date_start_master: 2021-05-27T10:50:49.174463Z
-                          date_end_master: 2021-05-27T10:50:49.175921Z
-                          n_synced_chunks: 1
-                        last_sync_agentgroups:
                           date_start_master: 2021-05-27T10:50:49.174463Z
                           date_end_master: 2021-05-27T10:50:49.175921Z
                           n_synced_chunks: 1
@@ -9638,7 +9669,7 @@ paths:
                     - info:
                         name: worker2
                         type: worker
-                        version: 4.3.0
+                        version: 4.4.0
                         ip: 172.21.0.6
                         n_active_agents: 1
                       status:
@@ -9657,12 +9688,15 @@ paths:
                             extra_valid: 0
                             shared: 0
                         sync_agent_info_free: true
-                        sync_agent_groups_free: true
-                        last_sync_agentinfo:
-                          date_start_master: 2021-05-27T10:50:48.832800Z
-                          date_end_master: 2021-05-27T10:50:48.833854Z
+                        last_sync_agentgroup:
+                          date_start: 2021-05-27T10:48:54.086973Z
+                          date_end: 2021-05-27T10:49:52.075794Z
                           n_synced_chunks: 1
-                        last_sync_agentgroups:
+                        last_sync_full_agentgroup:
+                          date_start: 2021-05-27T10:52:48.038573Z
+                          date_end: 2021-05-27T10:53:23.057795Z
+                          n_synced_chunks: 2
+                        last_sync_agentinfo:
                           date_start_master: 2021-05-27T10:50:48.832800Z
                           date_end_master: 2021-05-27T10:50:48.833854Z
                           n_synced_chunks: 1
@@ -9909,7 +9943,7 @@ paths:
                           cert: "/var/ossec/api/configuration/ssl/server.crt"
                           use_ca: false
                           ca: "/var/ossec/api/configuration/ssl/ca.crt"
-                          ssl_protocol: "TLSv1.2"
+                          ssl_protocol: "auto"
                           ssl_ciphers: ""
                         logs:
                           level: info
@@ -9947,7 +9981,7 @@ paths:
                           cert: "/var/ossec/api/configuration/ssl/server.crt"
                           use_ca: false
                           ca: "/var/ossec/api/configuration/ssl/ca.crt"
-                          ssl_protocol: "TLSv1.2"
+                          ssl_protocol: "auto"
                           ssl_ciphers: ""
                         logs:
                           path: /var/ossec/logs/api.log
@@ -9984,7 +10018,7 @@ paths:
                           cert: "/var/ossec/api/configuration/ssl/server.crt"
                           use_ca: false
                           ca: "/var/ossec/api/configuration/ssl/ca.crt"
-                          ssl_protocol: "TLSv1.2"
+                          ssl_protocol: "auto"
                           ssl_ciphers: ""
                         logs:
                           path: /var/ossec/logs/api.log
@@ -10116,7 +10150,6 @@ paths:
                   affected_items:
                     - path: /var/ossec
                       version: v4.3.0
-                      compilation_date: "2021-05-27T09:06:48Z"
                       type: server
                       max_agents: unlimited
                       openssl_support: yes
@@ -10242,16 +10275,14 @@ paths:
                         scan_on_start: yes
                         interval: "12h"
                         skip_nfs: yes
-                      vulnerability-detector:
-                        enabled: no
-                        interval: "5m"
-                        ignore_time: "6h"
-                        run_on_start: yes
-                        provider:
-                          name: nvd
-                          enabled: yes
-                          update_from_year: 2010
-                          update_interval: "1h"
+                      vulnerability-detection:
+                        enabled: yes
+                        index-status: yes
+                        feed-update-interval: "60m"
+                      indexer:
+                        enabled: yes
+                        hosts:
+                          host: http://127.0.0.1:9200
                       syscheck:
                         disabled: no
                         frequency: 43200
@@ -10290,11 +10321,10 @@ paths:
                         skip_proc: yes
                         skip_sys: yes
                         process_priority: 10
-                        max_eps: 100
+                        max_eps: 50
                         synchronization:
                           enabled: yes
                           interval: "5m"
-                          max_interval: "1h"
                           max_eps: 10
                       command:
                         - name: disable-account
@@ -11059,6 +11089,8 @@ paths:
         - $ref: '#/components/parameters/tag'
         - $ref: '#/components/parameters/log_level'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/select'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Wazuh node logs"
@@ -11331,6 +11363,8 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/get_dirnames_path'
         - $ref: '#/components/parameters/filename'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Successfully got all CDB lists and the files where they are defined"
@@ -11641,7 +11675,7 @@ paths:
                       name: "wazuh"
                       node: "master-node"
                     full_log: "ERROR"
-                    decoder:
+                    decoder: None
                     location: "/var/log/syslog"
                   alert: false
                   codemsg: 1
@@ -11790,7 +11824,6 @@ paths:
                   affected_items:
                     - path: /var/ossec
                       version: v4.3.0
-                      compilation_date: "2021-05-27T09:06:48Z"
                       type: server
                       max_agents: unlimited
                       openssl_support: yes
@@ -11827,6 +11860,7 @@ paths:
         - $ref: '#/components/parameters/raw'
         - $ref: '#/components/parameters/section'
         - $ref: '#/components/parameters/field'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Wazuh configuration"
@@ -11985,6 +12019,8 @@ paths:
                               syscheck_queries: 2
                               fim_file_queries: 2
                               fim_registry_queries: 0
+                              fim_registry_key_queries: 0
+                              fim_registry_value_queries: 0
                             rootcheck_queries:
                               rootcheck_queries: 2
                             sca_queries:
@@ -12010,8 +12046,6 @@ paths:
                               netinfo_queries: 0
                               hardware_queries: 0
                               osinfo_queries: 0
-                            vulnerability_detector_queries:
-                              vuln_cves_queries: 0
                             dbsync_queries: 0
                             unknown_queries: 0
                           global_queries: 161
@@ -12086,6 +12120,8 @@ paths:
                               syscheck_time: 49
                               fim_file_time: 30
                               fim_registry_time: 0
+                              fim_registry_key_time: 0
+                              fim_registry_value_time: 0
                             rootcheck_time:
                               rootcheck_time: 47
                             sca_time:
@@ -12111,8 +12147,6 @@ paths:
                               netinfo_time: 0
                               hardware_time: 0
                               osinfo_time: 0
-                            vulnerability_detector_time:
-                              vuln_cves_time: 0
                             dbsync_time: 0
                           global_time: 14
                           global_time_breakdown:
@@ -12695,6 +12729,8 @@ paths:
         - $ref: '#/components/parameters/tag'
         - $ref: '#/components/parameters/log_level'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/select'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Wazuh logs"
@@ -12834,7 +12870,7 @@ paths:
                           cert: "/var/ossec/api/configuration/ssl/server.crt"
                           use_ca: false
                           ca: "/var/ossec/api/configuration/ssl/ca.crt"
-                          ssl_protocol: "TLSv1.2"
+                          ssl_protocol: "auto"
                           ssl_ciphers: ""
                         access:
                           max_login_attempts: 50
@@ -13011,6 +13047,73 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
 
+  /manager/version/check:
+    get:
+      tags:
+      - Manager
+      summary: "Check available updates"
+      description: "Return if there is any available update"
+      operationId: api.controllers.manager_controller.check_available_version
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/force_query'
+      responses:
+        '200':
+          description: "Information about available new versions"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/NewVersions'
+              example:
+                data:
+                  last_check_date: '2023-10-09T15:39:57.616301+00:00'
+                  current_version: v4.8.0
+                  update_check: true
+                  last_available_major:
+                    tag: v5.0.0
+                    description: ""
+                    title: Wazuh 5.0.0
+                    published_date: '2023-10-05T12:48:00Z'
+                    semver:
+                      major: 5
+                      minor: 0
+                      patch: 0
+                  last_available_minor:
+                    tag: v4.9.1
+                    description: ""
+                    title: Wazuh 4.9.1
+                    published_date: '2023-10-05T12:47:00Z'
+                    semver:
+                      major: 4
+                      minor: 9
+                      patch: 1
+                  last_available_patch:
+                    tag: v4.8.2
+                    description: ""
+                    title: Wazuh 4.8.2
+                    published_date: '2023-10-05T12:46:00Z'
+                    semver:
+                      major: 4
+                      minor: 8
+                      patch: 2
+                  uuid": "edc90f7f-fca4-446c-8985-e69520948e42"
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '404':
+          $ref: '#/components/responses/ResourceNotFoundResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
   /mitre/groups:
     get:
       tags:
@@ -13030,6 +13133,7 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Get MITRE groups information"
@@ -13174,6 +13278,7 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Get MITRE mitigations information"
@@ -13292,6 +13397,7 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Get MITRE software information"
@@ -13363,6 +13469,7 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Get MITRE tactics information"
@@ -13447,6 +13554,7 @@ paths:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Get MITRE techniques information"
@@ -13744,6 +13852,7 @@ paths:
         - $ref: '#/components/parameters/nist-800-53'
         - $ref: '#/components/parameters/tsc'
         - $ref: '#/components/parameters/mitre'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Rule"
@@ -13931,6 +14040,9 @@ paths:
         - $ref: '#/components/parameters/get_dirnames_path'
         - $ref: '#/components/parameters/xml_filename'
         - $ref: '#/components/parameters/statusRLDParam'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/select'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Rule"
@@ -13988,6 +14100,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
         - $ref: '#/components/parameters/raw'
+        - $ref: '#/components/parameters/get_dirnames_path'
       responses:
         '200':
           description: "Rule content"
@@ -14137,6 +14250,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
         - $ref: '#/components/parameters/overwrite'
+        - $ref: '#/components/parameters/get_dirnames_path'
       requestBody:
         description: "Content of the rule to be uploaded"
         required: true
@@ -14192,6 +14306,7 @@ paths:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
+        - $ref: '#/components/parameters/get_dirnames_path'
       responses:
         '200':
           description: "Confirmation message"
@@ -14310,7 +14425,6 @@ paths:
         - $ref: '#/components/parameters/rationale'
         - $ref: '#/components/parameters/remediation'
         - $ref: '#/components/parameters/command'
-        - $ref: '#/components/parameters/status'
         - $ref: '#/components/parameters/reason'
         - $ref: '#/components/parameters/full_path_filter'
         - $ref: '#/components/parameters/process'
@@ -14341,21 +14455,20 @@ paths:
               example:
                 data:
                   affected_items:
-                    - description: "The cramfs filesystem type is a compressed read-only Linux filesystem embedded in 
+                    - description: "The cramfs filesystem type is a compressed read-only Linux filesystem embedded in
                       small footprint systems. A cramfs image can be used without having to first decompress the image."
                       id: 19000
                       reason: "Invalid path or wrong permissions to run command 'modprobe -n -v cramfs'"
                       command: "modprobe -n -v cramfs,lsmod"
-                      rationale: "Removing support for unneeded filesystem types reduces the local attack surface of the 
+                      rationale: "Removing support for unneeded filesystem types reduces the local attack surface of the
                       server. If this filesystem type is not needed, disable it."
                       condition: "all"
                       title: "Ensure mounting of cramfs filesystems is disabled."
-                      result: ""
+                      result: "not applicable"
                       policy_id: "cis_ubuntu20-04"
-                      remediation: "1) Edit or create a file in the /etc/modprobe.d/ directory ending in .conf and add 
-                      the following line: install cramfs /bin/true. 2) Run the following command to unload the cramfs 
+                      remediation: "1) Edit or create a file in the /etc/modprobe.d/ directory ending in .conf and add
+                      the following line: install cramfs /bin/true. 2) Run the following command to unload the cramfs
                       module: # rmmod cramfs"
-                      status: "Not applicable"
                       compliance:
                         - value: "1.1.1.1"
                           key: "cis"
@@ -14438,6 +14551,7 @@ paths:
     get:
       tags:
       - Syscheck
+      deprecated: true
       summary: "Get results"
       description: "Return FIM findings in the specified agent"
       operationId: api.controllers.syscheck_controller.get_syscheck_agent
@@ -14528,6 +14642,7 @@ paths:
     delete:
       tags:
         - Syscheck
+      deprecated: true
       summary: "Clear results"
       description: "Clear file integrity monitoring scan results for a specified agent. Only available for agents < 3.12.0, it doesn't apply for more recent ones"
       operationId: api.controllers.syscheck_controller.delete_syscheck_agent
@@ -14639,6 +14754,7 @@ paths:
         - $ref: '#/components/parameters/filename'
         - $ref: '#/components/parameters/get_dirnames_path'
         - $ref: '#/components/parameters/statusRLDParam'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List of decoders included in ossec.conf"
@@ -14712,6 +14828,9 @@ paths:
         - $ref: '#/components/parameters/xml_filename'
         - $ref: '#/components/parameters/get_dirnames_path'
         - $ref: '#/components/parameters/statusRLDParam'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/select'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List of decoders files"
@@ -14766,6 +14885,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
         - $ref: '#/components/parameters/raw'
+        - $ref: '#/components/parameters/get_dirnames_path'
       responses:
         '200':
           description: "Decoder content"
@@ -14911,6 +15031,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
         - $ref: '#/components/parameters/overwrite'
+        - $ref: '#/components/parameters/get_dirnames_path'
       requestBody:
         description: "Content of the decoder to be uploaded"
         required: true
@@ -14966,6 +15087,7 @@ paths:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
+        - $ref: '#/components/parameters/get_dirnames_path'
       responses:
         '200':
           description: "Confirmation message"
@@ -15114,6 +15236,7 @@ paths:
     delete:
       tags:
         - Experimental
+      deprecated: true
       summary: "Clear agents FIM results"
       description: "Clear the syscheck database for all agents or a list of them"
       operationId: api.controllers.experimental_controller.clear_syscheck_database
@@ -15264,6 +15387,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents hardware"
       description: "Return all agents (or a list of them) hardware info. This information include cpu, ram, scan info
       among others of all agents"
@@ -15359,6 +15483,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents netaddr"
       description: "Return all agents (or a list of them) IPv4 and IPv6 addresses associated to their network
       interfaces. This information include used IP protocol, interface, and IP address among others"
@@ -15437,6 +15562,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents netiface"
       description: "Return all agents (or a list of them) network interfaces. This information includes rx, scan, tx
       info and some network information among other"
@@ -15557,6 +15683,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents netproto"
       description: "Return all agents (or a list of them) routing configuration for each network interface. This
       information includes interface, type protocol information among other"
@@ -15632,6 +15759,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents OS"
       description: "Return all agents (or a list of them) OS info. This information includes os information,
       architecture information among other"
@@ -15735,6 +15863,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents packages"
       description: "Return all agents (or a list of them) packages info. This information includes name, section, size,
       and priority information of all packages among other"
@@ -15835,6 +15964,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents ports"
       description: "Return all agents (or a list of them) ports info. This information includes local IP, Remote IP,
       protocol information among other"
@@ -15938,6 +16068,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents processes"
       description: "Return all agents (or a list of them) processes info"
       operationId: api.controllers.experimental_controller.get_processes_info
@@ -16065,6 +16196,7 @@ paths:
     get:
       tags:
         - Experimental
+      deprecated: true
       summary: "Get agents hotfixes"
       description: "Return all agents (or a list of them) hotfixes info"
       operationId: api.controllers.experimental_controller.get_hotfixes_info
@@ -16123,6 +16255,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent hardware"
       description: "Return the agent's hardware info. This information include cpu, ram, scan info among others"
       operationId: api.controllers.syscollector_controller.get_hardware_info
@@ -16181,6 +16314,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent hotfixes"
       description: "Return all hotfixes installed by Microsoft(R) in Windows(R) systems (KB... fixes)"
       operationId: api.controllers.syscollector_controller.get_hotfix_info
@@ -16197,6 +16331,7 @@ paths:
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/hotfix'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return an agent's hotfix results"
@@ -16236,6 +16371,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent netaddr"
       description: "Return the agent's network address info. This information include used IP protocol, interface, IP
       address  among others"
@@ -16257,6 +16393,7 @@ paths:
         - $ref: '#/components/parameters/broadcast'
         - $ref: '#/components/parameters/netmask'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of agent's network results"
@@ -16298,6 +16435,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent netiface"
       description: "Return the agent's network interface info. This information include rx, scan, tx info and some
       network information among others"
@@ -16327,6 +16465,7 @@ paths:
         - $ref: '#/components/parameters/tx.dropped'
         - $ref: '#/components/parameters/rx.dropped'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of agent's network interfaces results"
@@ -16381,6 +16520,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent netproto"
       description: "Return the agent's routing configuration for each network interface"
       operationId: api.controllers.syscollector_controller.get_network_protocol_info
@@ -16400,6 +16540,7 @@ paths:
         - $ref: '#/components/parameters/gateway'
         - $ref: '#/components/parameters/dhcp'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of agent's network protocol results"
@@ -16442,6 +16583,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent OS"
       description: "Return the agent's OS info. This information include os information, architecture information among
       others of all agents"
@@ -16504,6 +16646,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent packages"
       description: "Return the agent's packages info. This information include name, section, size, priority
       information of all packages among others"
@@ -16525,6 +16668,7 @@ paths:
         - $ref: '#/components/parameters/file_format'
         - $ref: '#/components/parameters/package_version'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of agent's packages results"
@@ -16604,6 +16748,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent ports"
       description: "Return the agent's ports info. This information include local IP, Remote IP, protocol information
       among others"
@@ -16628,6 +16773,7 @@ paths:
         - $ref: '#/components/parameters/state'
         - $ref: '#/components/parameters/process'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of agent's packages results"
@@ -16709,6 +16855,7 @@ paths:
     get:
       tags:
         - Syscollector
+      deprecated: true
       summary: "Get agent processes"
       description: "Return the agent's processes info"
       operationId: api.controllers.syscollector_controller.get_processes_info
@@ -16738,6 +16885,7 @@ paths:
         - $ref: '#/components/parameters/sgroup'
         - $ref: '#/components/parameters/suser'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of agent's processes results"
@@ -16766,7 +16914,7 @@ paths:
                       tgid: 1
                       share: 729
                       rgroup: "root"
-                      argvs: "/scripts/entrypoint.sh nginx-lb 4.3"
+                      argvs: "/scripts/entrypoint.sh nginx-lb 4.4"
                       start_time: 1217866
                       stime: 0
                       vm_size: 3984
@@ -17284,6 +17432,8 @@ paths:
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Information about user"
@@ -17549,6 +17699,8 @@ paths:
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of roles"
@@ -17825,6 +17977,8 @@ paths:
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of security rules"
@@ -18063,6 +18217,8 @@ paths:
         - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "Return a list of policies"
@@ -18849,36 +19005,41 @@ paths:
                 message: "All specified task's status were returned"
                 error: 0
 
-  /vulnerability/{agent_id}:
-    get:
+  /events:
+    post:
       tags:
-        - Vulnerability
-      summary: "Get vulnerabilities"
-      description: "Return the vulnerabilities of an agent"
-      operationId: api.controllers.vulnerability_controller.get_vulnerability_agent
+      - Events
+      summary: "Ingest events"
+      description: |-
+        Send security events to analysisd.
+
+        The endpoint is limited to receiving a max of 30 requests per minute and a max bulk size of 100 events per request.
+      operationId: api.controllers.event_controller.forward_event
       x-rbac-actions:
-        - $ref: '#/x-rbac-catalog/actions/vulnerability:read'
+        - $ref: '#/x-rbac-catalog/actions/event:ingest'
       parameters:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
-        - $ref: '#/components/parameters/agent_id'
-        - $ref: '#/components/parameters/offset'
-        - $ref: '#/components/parameters/limit'
-        - $ref: '#/components/parameters/sort'
-        - $ref: '#/components/parameters/search'
-        - $ref: '#/components/parameters/select'
-        - $ref: '#/components/parameters/query'
-        - $ref: '#/components/parameters/distinct'
-        - $ref: '#/components/parameters/architecture'
-        - $ref: '#/components/parameters/cve'
-        - $ref: '#/components/parameters/name'
-        - $ref: '#/components/parameters/cve_version'
-        - $ref: '#/components/parameters/cve_type'
-        - $ref: '#/components/parameters/cve_status'
-        - $ref: '#/components/parameters/cve_severity'
+      requestBody:
+        content:
+          application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    description: "Bulk of events"
+                    type: array
+                    items:
+                      type: string
+                required:
+                - events
+              example:
+                events:
+                  - "Event value 1"
+                  - "{\"someKey\": \"Event value 2\"}"
       responses:
         '200':
-          description: "Get agent vulnerabilities"
+          description: "Events accepted"
           content:
             application/json:
               schema:
@@ -18886,40 +19047,12 @@ paths:
               example:
                 data:
                   affected_items:
-                    - severity: "High"
-                      updated: "2022-01-10"
-                      version: "2.34-6ubuntu1.3"
-                      type: "PACKAGE"
-                      name: "binutils"
-                      external_references: ["https://sourceware.org/bugzilla/show_bug.cgi?id=28694","https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;h=161e87d12167b1e36193385485c1f6ce92f74f02","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UQBH244M5PV6S6UMHUTCVCWFZDX7Y4M6/","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UUHLDDT3HH7YEY6TX7IJRGPJUTNNVEL3/","https://security.netapp.com/advisory/ntap-20220107-0002/","https://nvd.nist.gov/vuln/detail/CVE-2021-45078","http://people.canonical.com/~ubuntu-security/cve/2021/CVE-2021-45078.html","https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-45078"]
-                      condition: "Package unfixed"
-                      detection_time: "2022-03-14T11:04:04Z"
-                      cvss3_score: 7.8
-                      published: "2021-12-15"
-                      architecture: "amd64"
-                      cve: "CVE-2021-45078"
-                      status: "VALID"
-                      title: "CVE-2021-45078 affects binutils"
-                      cvss2_score: 6.8
-                    - severity: "High"
-                      updated: "2022-01-10"
-                      version: "2.34-6ubuntu1.3"
-                      type: "PACKAGE"
-                      name: "binutils-common"
-                      external_references: ["https://sourceware.org/bugzilla/show_bug.cgi?id=28694","https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;h=161e87d12167b1e36193385485c1f6ce92f74f02","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UQBH244M5PV6S6UMHUTCVCWFZDX7Y4M6/","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UUHLDDT3HH7YEY6TX7IJRGPJUTNNVEL3/","https://security.netapp.com/advisory/ntap-20220107-0002/","https://nvd.nist.gov/vuln/detail/CVE-2021-45078","http://people.canonical.com/~ubuntu-security/cve/2021/CVE-2021-45078.html","https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-45078"]
-                      condition: "Package unfixed"
-                      detection_time: "2022-03-14T11:04:04Z"
-                      cvss3_score: 7.8
-                      published: "2021-12-15"
-                      architecture: "amd64"
-                      cve: "CVE-2021-45078"
-                      status: "VALID"
-                      title: "CVE-2021-45078 affects binutils-common"
-                      cvss2_score: 6.8
+                    - "Event value 1"
+                    - "{\"someKey\": \"Event value 2\"}"
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
-                message: "All selected vulnerabilities were returned"
+                message: "All events were forwarded to analisysd"
                 error: 0
         '400':
           $ref: '#/components/responses/ResponseError'
@@ -18929,96 +19062,13 @@ paths:
           $ref: '#/components/responses/PermissionDeniedResponse'
         '405':
           $ref: '#/components/responses/InvalidHTTPMethodResponse'
-        '429':
-          $ref: '#/components/responses/TooManyRequestsResponse'
-
-  /vulnerability/{agent_id}/last_scan:
-    get:
-      tags:
-      - Vulnerability
-      summary: "Get last scan datetime"
-      description: "Return when the last full and partial vulnerability scan of a specified agent ended."
-      operationId: api.controllers.vulnerability_controller.get_last_scan_agent
-      x-rbac-actions:
-        - $ref: '#/x-rbac-catalog/actions/vulnerability:read'
-      parameters:
-        - $ref: '#/components/parameters/pretty'
-        - $ref: '#/components/parameters/wait_for_complete'
-        - $ref: '#/components/parameters/agent_id'
-      responses:
-        '200':
-          description: "Scan dates"
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - type: object
-                    properties:
-                      data:
-                        $ref: '#/components/schemas/AllItemsResponseLastScan'
-              example:
-                data:
-                  affected_items:
-                    - last_full_scan: '2021-06-14T07:45:51Z'
-                      last_partial_scan: '2021-06-14T10:15:56Z'
-                  total_affected_items: 1
-                  total_failed_items: 0
-                  failed_items: [ ]
-                message: Last vulnerability scans of the agent were returned
-                error: 0
-        '400':
-          $ref: '#/components/responses/ResponseError'
-        '401':
-          $ref: '#/components/responses/UnauthorizedResponse'
-        '403':
-          $ref: '#/components/responses/PermissionDeniedResponse'
-        '405':
-          $ref: '#/components/responses/InvalidHTTPMethodResponse'
-        '429':
-          $ref: '#/components/responses/TooManyRequestsResponse'
-
-  /vulnerability/{agent_id}/summary/{field}:
-    get:
-      tags:
-        - Vulnerability
-      summary: "Get agent vulnerabilities' field summary"
-      description: "Return a summary of the vulnerabilities' field of an agent"
-      operationId: api.controllers.vulnerability_controller.get_vulnerabilities_field_summary
-      x-rbac-actions:
-        - $ref: '#/x-rbac-catalog/actions/vulnerability:read'
-      parameters:
-        - $ref: '#/components/parameters/pretty'
-        - $ref: '#/components/parameters/wait_for_complete'
-        - $ref: '#/components/parameters/agent_id'
-        - $ref: '#/components/parameters/vulnerability_field'
-        - $ref: '#/components/parameters/limit'
-      responses:
-        '200':
-          description: "Get agent vulnerabilities' field summary"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiResponse'
-              example:
-                data:
-                  severity:
-                    critical: 8
-                    medium: 3
-                    high: 1
-                    low: 0
-                error: 0
-        '400':
-          $ref: '#/components/responses/ResponseError'
-        '401':
-          $ref: '#/components/responses/UnauthorizedResponse'
-        '403':
-          $ref: '#/components/responses/PermissionDeniedResponse'
-        '405':
-          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '406':
+          $ref: '#/components/responses/WrongContentTypeResponse'
+        '413':
+          $ref: '#/components/responses/RequestTooLargeResponse'
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
 
 externalDocs:
   description: "Find more about Wazuh API usage"
-  url: 'https://documentation.wazuh.com/4.3/user-manual/api/index.html'
+  url: 'https://documentation.wazuh.com/5.0/user-manual/api/index.html'

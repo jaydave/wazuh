@@ -13,6 +13,7 @@
 #define _RSYNC_H_
 
 // Define EXPORTED for any platform
+#ifndef EXPORTED
 #ifdef _WIN32
 #ifdef WIN_EXPORT
 #define EXPORTED __declspec(dllexport)
@@ -23,6 +24,7 @@
 #define EXPORTED __attribute__((visibility("default")))
 #else
 #define EXPORTED
+#endif
 #endif
 
 #include "commonDefs.h"
@@ -37,6 +39,13 @@ extern "C" {
  * @param log_function pointer to log function to be used by the rsync.
  */
 EXPORTED void rsync_initialize(log_fnc_t log_function);
+
+/**
+ * @brief Initialize the shared library with a full log function.
+ *
+ * @param logFunc Pointer to full log function to be used by the rsync.
+ */
+EXPORTED void rsync_initialize_full_log_function(full_log_fnc_t logFunc);
 
 /**
  * @brief Turns off the services provided by the shared library.

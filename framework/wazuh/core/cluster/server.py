@@ -1,5 +1,6 @@
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
-# This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import asyncio
 import contextlib
@@ -407,7 +408,7 @@ class AbstractServer:
 
     def get_connected_nodes(self, filter_node: str = None, offset: int = 0, limit: int = common.DATABASE_LIMIT,
                             sort: Dict = None, search: Dict = None, select: Dict = None,
-                            filter_type: str = 'all') -> Dict:
+                            filter_type: str = 'all', distinct: bool = False) -> Dict:
         """Get all connected nodes, including the master node.
 
         Parameters
@@ -426,6 +427,8 @@ class AbstractServer:
             Select which fields to return (separated by comma).
         filter_type : str
             Type of node (worker/master).
+        distinct : bool
+            Look for distinct values.
 
         Returns
         -------
@@ -475,7 +478,8 @@ class AbstractServer:
                                    sort_ascending=False if sort is not None and sort['order'] == 'desc' else True,
                                    allowed_sort_fields=default_fields,
                                    offset=offset,
-                                   limit=limit)
+                                   limit=limit,
+                                   distinct=distinct)
 
     async def check_clients_keepalive(self):
         """Check date of the last received keep alive.

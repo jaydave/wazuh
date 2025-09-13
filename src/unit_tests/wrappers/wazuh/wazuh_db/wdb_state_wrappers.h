@@ -12,7 +12,7 @@
 #ifndef WDB_STATE_WRAPPERS_H
 #define WDB_STATE_WRAPPERS_H
 
-#include "wazuh_db/wdb.h"
+#include "../wazuh_db/wdb.h"
 
 cJSON* __wrap_wdb_create_state_json();
 
@@ -24,6 +24,8 @@ void __wrap_w_inc_queries_total();
 
 void __wrap_w_inc_global();
 
+void __wrap_w_inc_global_open_time();
+
 void __wrap_w_inc_global_sql();
 
 void __wrap_w_inc_global_sql_time();
@@ -31,6 +33,14 @@ void __wrap_w_inc_global_sql_time();
 void __wrap_w_inc_global_backup();
 
 void __wrap_w_inc_global_backup_time(__attribute__((unused))struct timeval diff);
+
+void __wrap_w_inc_global_vacuum();
+
+void __wrap_w_inc_global_vacuum_time(__attribute__((unused))struct timeval diff);
+
+void __wrap_w_inc_global_get_fragmentation();
+
+void __wrap_w_inc_global_get_fragmentation_time(__attribute__((unused))struct timeval diff);
 
 // Global agent counters
 
@@ -53,6 +63,10 @@ void __wrap_w_inc_global_agent_update_keepalive_time(__attribute__((unused))stru
 void __wrap_w_inc_global_agent_update_connection_status();
 
 void __wrap_w_inc_global_agent_update_connection_status_time(__attribute__((unused))struct timeval diff);
+
+void __wrap_w_inc_global_agent_update_status_code();
+
+void __wrap_w_inc_global_agent_update_status_code_time(__attribute__((unused))struct timeval diff);
 
 void __wrap_w_inc_global_agent_reset_agents_connection();
 
@@ -109,6 +123,10 @@ void __wrap_w_inc_global_agent_set_agent_groups_time(__attribute__((unused))stru
 void __wrap_w_inc_global_agent_get_groups_integrity();
 
 void __wrap_w_inc_global_agent_get_groups_integrity_time(__attribute__((unused))struct timeval diff);
+
+void __wrap_w_inc_global_agent_get_distinct_groups();
+
+void __wrap_w_inc_global_agent_get_distinct_groups_time(__attribute__((unused))struct timeval diff);
 
 // Global group counters
 

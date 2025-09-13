@@ -37,9 +37,10 @@ extern OSHash *remoted_agents_state;
 STATIC remoted_agent_state_t * get_node(const char *agent_id);
 
 /**
- * @brief Clean non active agents from agents state.
+ * @brief Clean non active agents from agents state
+ * @param sock Wazuh DB socket
  */
-STATIC void w_remoted_clean_agents_state();
+STATIC void w_remoted_clean_agents_state(int *sock);
 
 /**
  * @brief Increment received event messages counter for agents
@@ -132,11 +133,16 @@ void * rem_state_main() {
 
     mdebug1("State file updating thread started.");
 
+    int sock = -1;
+    sock = wdbc_connect();
+
     while (1) {
         rem_write_state();
         sleep(interval);
-        w_remoted_clean_agents_state();
+        w_remoted_clean_agents_state(&sock);
     }
+
+    wdbc_close(&sock);
 
     return NULL;
 }
@@ -157,7 +163,7 @@ int rem_write_state() {
     snprintf(path, sizeof(path), OS_PIDFILE "/%s.state", __local_name);
     snprintf(path_temp, sizeof(path_temp), "%s.temp", path);
 
-    if (fp = fopen(path_temp, "w"), !fp) {
+    if (fp = wfopen(path_temp, "w"), !fp) {
         merror(FOPEN_ERROR, path_temp, errno, strerror(errno));
         return -1;
     }
@@ -227,9 +233,8 @@ STATIC remoted_agent_state_t * get_node(const char *agent_id) {
     }
 }
 
-STATIC void w_remoted_clean_agents_state() {
+STATIC void w_remoted_clean_agents_state(int *sock) {
     int *active_agents = NULL;
-    int sock = -1;
     OSHashNode *hash_node;
     unsigned int inode_it = 0;
 
@@ -239,7 +244,7 @@ STATIC void w_remoted_clean_agents_state() {
         return;
     }
 
-    if (active_agents = wdb_get_agents_ids_of_current_node(AGENT_CS_ACTIVE, &sock, 0, -1), active_agents == NULL) {
+    if (active_agents = wdb_get_agents_ids_of_current_node(AGENT_CS_ACTIVE, sock, 0, -1), active_agents == NULL) {
         return;
     }
 

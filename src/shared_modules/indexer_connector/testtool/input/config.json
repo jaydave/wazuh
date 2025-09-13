@@ -1,0 +1,10 @@
+{
+  "name": "wazuh-states-vulnerabilities",
+  "enabled": "yes",
+  "hosts": ["https://0.0.0.0:9200"],
+  "ssl": {
+    "certificate_authorities": ["~/root-ca.pem"],
+    "certificate": "~/indexer.pem",
+    "key": "~/indexer-key.pem"
+  }
+}

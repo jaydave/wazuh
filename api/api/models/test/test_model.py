@@ -1,13 +1,14 @@
 # Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import importlib.util
 import inspect
 import sys
 from json import JSONDecodeError
 from os import listdir
 from os.path import abspath, dirname, join
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from connexion import ProblemException
@@ -16,8 +17,9 @@ with patch('wazuh.core.common.wazuh_uid'):
     with patch('wazuh.core.common.wazuh_gid'):
         sys.modules['api.authentication'] = MagicMock()
         from api.models import base_model_ as bm
-        from wazuh import WazuhError
+        from api.models import event_ingest_model
         from api.util import deserialize_model
+        from wazuh import WazuhError
 
         del sys.modules['api.authentication']
 
@@ -26,7 +28,8 @@ models_path = dirname(dirname(abspath(__file__)))
 
 class TestModel(bm.Body):
     """Test class for custom Model. Body inherits from Model and has all the attributes required for testing."""
-
+    __test__ = False
+    
     def __init__(self, *args):
 
         self.swagger_types = {f"arg_{i + 1}": type(arg) for i, arg in enumerate(args)}
@@ -284,3 +287,17 @@ def test_all_models(deserialize_mock, module_name):
                 # Test the only possible overwritten method: `from_dict`
                 getattr(module_class, 'from_dict')('test')
                 deserialize_mock.assert_called_with('test', module_class)
+
+
+@pytest.mark.parametrize('size,raises', ([1, True], [2, False]))
+async def test_event_ingest_model_validation(size, raises):
+    request = {'events': [{"foo": 1}, {"bar": 2}]}
+    event_ingest_model.MAX_EVENTS_PER_REQUEST = size
+
+    if raises:
+        with pytest.raises(ProblemException) as exc:
+            await event_ingest_model.EventIngestModel.get_kwargs(request)
+
+        assert exc.value.title == 'Events bulk size exceeded'
+    else:
+        await event_ingest_model.EventIngestModel.get_kwargs(request)

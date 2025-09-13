@@ -13,6 +13,8 @@
 #include "wdb_state.h"
 #include <os_net/os_net.h>
 
+#define WDB_AGENT_EVENTS_TOPIC "wdb-agent-events"
+
 static void wdb_help() __attribute__ ((noreturn));
 static void handler(int signum);
 static void cleanup();
@@ -94,11 +96,21 @@ int main(int argc, char ** argv)
     wconfig.open_db_limit = getDefine_Int("wazuh_db", "open_db_limit", 1, 4096);
     nofile = getDefine_Int("wazuh_db", "rlimit_nofile", 1024, 1048576);
 
+    wconfig.fragmentation_threshold = getDefine_Int("wazuh_db", "fragmentation_threshold", 0, 100);
+    wconfig.fragmentation_delta = getDefine_Int("wazuh_db", "fragmentation_delta", 0, 100);
+    wconfig.free_pages_percentage = getDefine_Int("wazuh_db", "free_pages_percentage", 0, 99);
+    wconfig.max_fragmentation = getDefine_Int("wazuh_db", "max_fragmentation", 0, 100);
+    wconfig.check_fragmentation_interval = getDefine_Int("wazuh_db", "check_fragmentation_interval", 1, 30758400);
+
     // Allocating memory for configuration structures and setting default values
     wdb_init_conf();
 
+    int modules = 0;
+    modules |= WAZUHDB;
+    modules |= CCLUSTER;
+
     // Read ossec.conf
-    if (ReadConfig(WAZUHDB, OSSECCONF, NULL, NULL) < 0) {
+    if (ReadConfig(modules, OSSECCONF, &gconfig, NULL) < 0) {
         merror_exit("Invalid configuration block for Wazuh-DB.");
     }
 
@@ -118,8 +130,7 @@ int main(int argc, char ** argv)
 
     // Initialize variables
 
-    open_dbs = OSHash_Create();
-    if (!open_dbs) merror_exit("wazuh_db: OSHash_Create() failed");
+    wdb_pool_init();
 
     if (!run_foreground) {
         goDaemon();
@@ -189,6 +200,14 @@ int main(int argc, char ** argv)
 
     minfo(STARTUP_MSG, (int)getpid());
 
+    // Router module logging initialization
+    router_initialize(taggedLogFunction);
+
+    // Router provider initialization
+    if (router_agent_events_handle = router_provider_create(WDB_AGENT_EVENTS_TOPIC, false), !router_agent_events_handle) {
+        mdebug2("Failed to create router handle for 'wdb-agent-events'.");
+    }
+
     if (notify_queue = wnotify_init(1), !notify_queue) {
         merror_exit("at run_dealer(): wnotify_init(): %s (%d)",
                 strerror(errno), errno);
@@ -233,7 +252,6 @@ int main(int argc, char ** argv)
     }
 
     // Join threads
-
     pthread_join(thread_dealer, NULL);
 
     for (i = 0; i < wconfig.worker_pool_size; i++) {
@@ -248,8 +266,6 @@ int main(int argc, char ** argv)
         pthread_join(thread_backup, NULL);
     }
     wdb_close_all();
-
-    OSHash_Free(open_dbs);
     wdb_free_conf();
 
     // Reset template here too, remove queue/db/.template.db again
@@ -372,7 +388,7 @@ void * run_worker(__attribute__((unused)) void * args) {
 
         switch (length) {
         case -1:
-            merror("at run_worker(): at recv(): %s (%d)", strerror(errno), errno);
+            mdebug1("at run_worker(): at recv(): %s (%d)", strerror(errno), errno);
             close(peer);
             continue;
 
@@ -419,9 +435,19 @@ void * run_worker(__attribute__((unused)) void * args) {
 }
 
 void * run_gc(__attribute__((unused)) void * args) {
+    int fragmentation_interval = wconfig.check_fragmentation_interval;
     while (running) {
         wdb_commit_old();
+
+        if (fragmentation_interval <= 0) {
+            wdb_check_fragmentation();
+            fragmentation_interval = wconfig.check_fragmentation_interval;
+        } else {
+            fragmentation_interval--;
+        }
+
         wdb_close_old();
+
         sleep(1);
     }
 
@@ -449,7 +475,7 @@ void * run_backup(__attribute__((unused)) void * args) {
                                 merror("Creating Global DB snapshot by interval failed: %s", output);
                             }
                             last_global_backup_time = current_time;
-                            wdb_leave(wdb);
+                            wdb_pool_leave(wdb);
                         }
                     }
                     break;
@@ -508,7 +534,7 @@ void * run_up(__attribute__((unused)) void * args) {
         wdb = wdb_open_agent2(atoi(entry));
 
         if (wdb != NULL) {
-            wdb_leave(wdb);
+            wdb_pool_leave(wdb);
         }
 
         free(entry);

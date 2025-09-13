@@ -3,6 +3,7 @@
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import logging
+import mimetypes
 from typing import Union
 
 from aiohttp import web
@@ -12,7 +13,7 @@ from api.encoder import dumps, prettify
 from api.models.agent_added_model import AgentAddedModel
 from api.models.agent_inserted_model import AgentInsertedModel
 from api.models.base_model_ import Body
-from api.models.group_added_model import GroupAddedModel
+from api.models.agent_group_added_model import GroupAddedModel
 from api.util import parse_api_param, remove_nones_to_dict, raise_if_exc, deprecate_endpoint
 from api.validator import check_component_configuration_pair
 from wazuh import agent, stats
@@ -106,7 +107,7 @@ async def get_agents(request, pretty: bool = False, wait_for_complete: bool = Fa
                      offset: int = 0, limit: int = DATABASE_LIMIT, select: str = None, sort: str = None,
                      search: str = None, status: str = None, q: str = None, older_than: str = None, manager: str = None,
                      version: str = None, group: str = None, node_name: str = None, name: str = None, ip: str = None,
-                     group_config_status: str = None) -> web.Response:
+                     group_config_status: str = None, distinct: bool = False) -> web.Response:
     """Get information about all agents or a list of them.
 
     Parameters
@@ -150,6 +151,8 @@ async def get_agents(request, pretty: bool = False, wait_for_complete: bool = Fa
         Filter by agent IP.
     group_config_status : str
         Filter by agent groups configuration sync status.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -174,7 +177,8 @@ async def get_agents(request, pretty: bool = False, wait_for_complete: bool = Fa
                     'registerIP': request.query.get('registerIP', None),
                     'group_config_status': group_config_status
                 },
-                'q': q
+                'q': q,
+                'distinct': distinct
                 }
     # Add nested fields to kwargs filters
     nested = ['os.version', 'os.name', 'os.platform']
@@ -854,7 +858,7 @@ async def get_daemon_stats(request, agent_id: str, pretty: bool = False, wait_fo
     dapi = DistributedAPI(f=stats.get_daemons_stats_agents,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
                           request_type='distributed_master',
-                          is_async=False,
+                          is_async=True,
                           wait_for_complete=wait_for_complete,
                           logger=logger,
                           rbac_permissions=request['token_info']['rbac_policies'])
@@ -862,8 +866,8 @@ async def get_daemon_stats(request, agent_id: str, pretty: bool = False, wait_fo
 
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
-
-async def get_component_stats(request, pretty: bool = False, wait_for_complete: bool = False, agent_id: str = None,
+async def get_component_stats(request, pretty: bool = False, 
+                              wait_for_complete: bool = False, agent_id: str = None,
                               component: str = None) -> web.Response:
     """Get a specified agent's component stats.
 
@@ -875,7 +879,8 @@ async def get_component_stats(request, pretty: bool = False, wait_for_complete: 
     wait_for_complete : bool
         Disable timeout response.
     agent_id : str
-        Agent ID for which the specified component's stats are got. All possible values from 000 onwards.
+        Agent ID for which the specified component's stats are got. All possible values 
+        from 000 onwards.
     component : str
         Selected agent's component which stats are got.
 
@@ -1050,8 +1055,10 @@ async def delete_groups(request, groups_list: str = None, pretty: bool = False,
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_list_group(request, pretty: bool = False, wait_for_complete: bool = False, groups_list: str = None,
-                         offset: int = 0, limit: int = None, sort: str = None, search: str = None) -> web.Response:
+async def get_list_group(request, pretty: bool = False, wait_for_complete: bool = False,
+                        groups_list: str = None, offset: int = 0, limit: int = None,
+                        sort: str = None, search: str = None, q: str = None, select: str = None,
+                        distinct: bool = False) -> web.Response:
     """Get groups.
 
     Returns a list containing basic information about each agent group such as number of agents belonging to the group
@@ -1075,6 +1082,12 @@ async def get_list_group(request, pretty: bool = False, wait_for_complete: bool 
         ascending or descending order.
     search : str
         Look for elements with the specified string.
+    q : str
+        Query to filter results by.
+    select : str
+        Select which fields to return (separated by comma).
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -1085,9 +1098,15 @@ async def get_list_group(request, pretty: bool = False, wait_for_complete: bool 
     f_kwargs = {'offset': offset,
                 'limit': limit,
                 'group_list': groups_list,
-                'sort': parse_api_param(sort, 'sort'),
-                'search': parse_api_param(search, 'search'),
-                'hash_algorithm': hash_}
+                'sort_by': parse_api_param(sort, 'sort')['fields'] if sort is not None else ['name'],
+                'sort_ascending': True if sort is None or parse_api_param(sort, 'sort')['order'] == 'asc' else False,
+                'search_text': parse_api_param(search, 'search')['value'] if search is not None else None,
+                'complementary_search': parse_api_param(search, 'search')['negation'] if search is not None else None,
+                'hash_algorithm': hash_,
+                'q': q,
+                'select': select,
+                'distinct': distinct}
+
     dapi = DistributedAPI(f=agent.get_agent_groups,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
                           request_type='local_master',
@@ -1103,7 +1122,8 @@ async def get_list_group(request, pretty: bool = False, wait_for_complete: bool 
 
 async def get_agents_in_group(request, group_id: str, pretty: bool = False, wait_for_complete: bool = False,
                               offset: int = 0, limit: int = DATABASE_LIMIT, select: str = None, sort: str = None,
-                              search: str = None, status: str = None, q: str = None) -> web.Response:
+                              search: str = None, status: str = None, q: str = None,
+                              distinct: bool = False) -> web.Response:
     """Get the list of agents that belongs to the specified group.
 
     Parameters
@@ -1130,6 +1150,8 @@ async def get_agents_in_group(request, group_id: str, pretty: bool = False, wait
         Filters by agent status. Use commas to enter multiple statuses.
     q : str
         Query to filter results by. For example q&#x3D;&amp;quot;status&#x3D;active&amp;quot;
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -1145,7 +1167,8 @@ async def get_agents_in_group(request, group_id: str, pretty: bool = False, wait
                 'filters': {
                     'status': status,
                 },
-                'q': q}
+                'q': q,
+                'distinct': distinct}
 
     dapi = DistributedAPI(f=agent.get_agents_in_group,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
@@ -1233,7 +1256,7 @@ async def get_group_config(request, group_id: str, pretty: bool = False, wait_fo
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def put_group_config(request, body: dict, group_id: str, pretty: bool = False,
+async def put_group_config(request, body: bytes, group_id: str, pretty: bool = False,
                            wait_for_complete: bool = False) -> web.Response:
     """Update group configuration.
 
@@ -1243,8 +1266,8 @@ async def put_group_config(request, body: dict, group_id: str, pretty: bool = Fa
     Parameters
     ----------
     request : connexion.request
-    body : dict
-        Dictionary with the new group configuration.
+    body : bytes
+        Bytes object with the new group configuration.
         The body is obtained from the XML file and decoded in this function.
     group_id : str
         Group ID.
@@ -1260,7 +1283,7 @@ async def put_group_config(request, body: dict, group_id: str, pretty: bool = Fa
     """
     # Parse body to utf-8
     Body.validate_content_type(request, expected_content_type='application/xml')
-    parsed_body = Body.decode_body(body, unicode_error=2006, attribute_error=2007)
+    parsed_body = Body.decode_body(body, unicode_error=1911, attribute_error=1912)
 
     f_kwargs = {'group_list': [group_id],
                 'file_data': parsed_body}
@@ -1279,7 +1302,8 @@ async def put_group_config(request, body: dict, group_id: str, pretty: bool = Fa
 
 
 async def get_group_files(request, group_id: str, pretty: bool = False, wait_for_complete: bool = False,
-                          offset: int = 0, limit: int = None, sort: str = None, search: str = None) -> web.Response:
+                          offset: int = 0, limit: int = None, sort: str = None, search: str = None, 
+                          q: str = None, select: str = None, distinct: bool = False) -> web.Response:
     """Get the files placed under the group directory.
 
     Parameters
@@ -1300,6 +1324,12 @@ async def get_group_files(request, group_id: str, pretty: bool = False, wait_for
         ascending or descending order.
     search : str
         Look for elements with the specified string.
+    q : str
+        Query to filter results by.
+    select : str
+        Select which fields to return (separated by comma).
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -1314,7 +1344,10 @@ async def get_group_files(request, group_id: str, pretty: bool = False, wait_for
                 'sort_ascending': True if sort is None or parse_api_param(sort, 'sort')['order'] == 'asc' else False,
                 'search_text': parse_api_param(search, 'search')['value'] if search is not None else None,
                 'complementary_search': parse_api_param(search, 'search')['negation'] if search is not None else None,
-                'hash_algorithm': hash_}
+                'hash_algorithm': hash_,
+                'q': q,
+                'select': select,
+                'distinct': distinct}
 
     dapi = DistributedAPI(f=agent.get_group_files,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
@@ -1329,9 +1362,9 @@ async def get_group_files(request, group_id: str, pretty: bool = False, wait_for
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_group_file_json(request, group_id: str, file_name: str, pretty: bool = False,
-                              wait_for_complete: bool = False) -> web.Response:
-    """Get the files placed under the group directory in JSON format.
+async def get_group_file(request, group_id: str, file_name: str, raw: bool = False, pretty: bool = False,
+                              wait_for_complete: bool = False) -> web.Response | ConnexionResponse:
+    """Get the files placed under the group directory.
 
     Parameters
     ----------
@@ -1340,6 +1373,8 @@ async def get_group_file_json(request, group_id: str, file_name: str, pretty: bo
         Group ID.
     file_name : str
         Name of the file to be obtained.
+    raw : bool
+        Respond in raw format.
     pretty: bool
         Show results in human-readable format.
     wait_for_complete : bool
@@ -1353,7 +1388,7 @@ async def get_group_file_json(request, group_id: str, file_name: str, pretty: bo
     f_kwargs = {'group_list': [group_id],
                 'filename': file_name,
                 'type_conf': request.query.get('type', None),
-                'return_format': 'json'}
+                'raw': raw}
 
     dapi = DistributedAPI(f=agent.get_file_conf,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
@@ -1364,49 +1399,18 @@ async def get_group_file_json(request, group_id: str, file_name: str, pretty: bo
                           rbac_permissions=request['token_info']['rbac_policies']
                           )
     data = raise_if_exc(await dapi.distribute_function())
+
+    if raw:
+        mimetype, _ = mimetypes.guess_type(file_name)
+        if mimetype is None:
+            mimetype = 'text/plain'
+        if file_name == 'agent.conf':
+            mimetype = 'application/xml'
+
+        return ConnexionResponse(body=data['data'], mimetype=mimetype)
+
 
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
-
-
-async def get_group_file_xml(request, group_id: str, file_name: str, pretty: bool = False,
-                             wait_for_complete: bool = False) -> ConnexionResponse:
-    """Get the files placed under the group directory in XML format.
-
-    Parameters
-    ----------
-    request : connexion.request
-    group_id : str
-        Group ID.
-    file_name : str
-        Name of the file to be obtained.
-    pretty: bool
-        Show results in human-readable format.
-    wait_for_complete : bool
-        Disable timeout response.
-
-    Returns
-    -------
-    connexion.lifecycle.ConnexionResponse
-        API response.
-    """
-    f_kwargs = {'group_list': [group_id],
-                'filename': file_name,
-                'type_conf': request.query.get('type', None),
-                'return_format': 'xml'}
-
-    dapi = DistributedAPI(f=agent.get_file_conf,
-                          f_kwargs=remove_nones_to_dict(f_kwargs),
-                          request_type='local_master',
-                          is_async=False,
-                          wait_for_complete=wait_for_complete,
-                          logger=logger,
-                          rbac_permissions=request['token_info']['rbac_policies']
-                          )
-    data = raise_if_exc(await dapi.distribute_function())
-    response = ConnexionResponse(body=data["data"], mimetype='application/xml')
-
-    return response
-
 
 async def restart_agents_by_group(request, group_id: str, pretty: bool = False,
                                   wait_for_complete: bool = False) -> web.Response:
@@ -1542,7 +1546,7 @@ async def get_agent_no_group(request, pretty: bool = False, wait_for_complete: b
 
 async def get_agent_outdated(request, pretty: bool = False, wait_for_complete: bool = False, offset: int = 0,
                              limit: int = DATABASE_LIMIT, sort: str = None, search: str = None,
-                             q: str = None) -> web.Response:
+                             select: str = None, q: str = None) -> web.Response:
     """Get outdated agents.
 
     Parameters
@@ -1561,6 +1565,8 @@ async def get_agent_outdated(request, pretty: bool = False, wait_for_complete: b
         ascending or descending order.
     search : str
         Look for elements with the specified string.
+    select : str
+        Select which fields to return (separated by comma).
     q : str
         Query to filter results by. For example "q&#x3D;&amp;quot;status&#x3D;active&amp;quot;".
 
@@ -1573,6 +1579,7 @@ async def get_agent_outdated(request, pretty: bool = False, wait_for_complete: b
                 'limit': limit,
                 'sort': parse_api_param(sort, 'sort'),
                 'search': parse_api_param(search, 'search'),
+                'select': select,
                 'q': q}
 
     dapi = DistributedAPI(f=agent.get_outdated_agents,

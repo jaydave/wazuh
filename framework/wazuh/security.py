@@ -14,9 +14,9 @@ from wazuh.core.security import invalid_users_tokens, invalid_roles_tokens, inva
     load_spec, sanitize_rbac_policy, update_security_conf, REQUIRED_FIELDS, SORT_FIELDS, SORT_FIELDS_GET_USERS
 from wazuh.core.utils import process_array
 from wazuh.rbac.decorators import expose_resources
-from wazuh.rbac.orm import AuthenticationManager, PoliciesManager, RolesManager, RolesPoliciesManager, \
-    UserRolesManager, RolesRulesManager, RulesManager
-from wazuh.rbac.orm import SecurityError, max_id_reserved
+from wazuh.rbac.orm import AuthenticationManager, PoliciesManager, RolesManager, RolesPoliciesManager
+from wazuh.rbac.orm import SecurityError, MAX_ID_RESERVED
+from wazuh.rbac.orm import UserRolesManager, RolesRulesManager, RulesManager
 
 # Minimum eight characters, at least one uppercase letter, one lowercase letter, one number and one special character:
 _user_password = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$')
@@ -68,7 +68,8 @@ def get_user_me(token: dict) -> AffectedItemsWazuhResult:
                   post_proc_kwargs={'exclude_codes': [5001]})
 def get_users(user_ids: list = None, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort_by: dict = None,
               sort_ascending: bool = True, search_text: str = None, select: str = None,
-              complementary_search: bool = False, search_in_fields: list = None) -> AffectedItemsWazuhResult:
+              complementary_search: bool = False, search_in_fields: list = None,
+              q: str = None, distinct: bool = False) -> AffectedItemsWazuhResult:
     """Get the information of a specified user.
 
     Parameters
@@ -91,6 +92,10 @@ def get_users(user_ids: list = None, offset: int = 0, limit: int = common.DATABA
         Find items without the text to search.
     search_in_fields : list
         Fields to search in.
+    q : str
+        Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -110,7 +115,7 @@ def get_users(user_ids: list = None, offset: int = 0, limit: int = common.DATABA
     data = process_array(affected_items, search_text=search_text, search_in_fields=search_in_fields, select=select,
                          complementary_search=complementary_search, sort_by=sort_by, sort_ascending=sort_ascending,
                          offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS_GET_USERS,
-                         required_fields=REQUIRED_FIELDS)
+                         required_fields=REQUIRED_FIELDS, q=q, distinct=distinct)
     result.affected_items = data['items']
     result.total_affected_items = data['totalItems']
 
@@ -190,8 +195,8 @@ def create_user(username: str = None, password: str = None) -> AffectedItemsWazu
 
 
 @expose_resources(actions=['security:update'], resources=['user:id:{user_id}'])
-def update_user(user_id: str = None, password: str = None) -> AffectedItemsWazuhResult:
-    """Update a specified user.
+def update_user(user_id: str = None, password: str = None, current_user: str = None) -> AffectedItemsWazuhResult:
+    """Update a specified user
 
     Parameters
     ----------
@@ -199,7 +204,8 @@ def update_user(user_id: str = None, password: str = None) -> AffectedItemsWazuh
         User ID.
     password : str
         Password for the new user.
-
+    current_user : str
+        Name of the user that made the request.
     Raises
     ------
     WazuhError(4001)
@@ -221,6 +227,14 @@ def update_user(user_id: str = None, password: str = None) -> AffectedItemsWazuh
             raise WazuhError(5009)
         elif not _user_password.match(password):
             raise WazuhError(5007)
+
+        if int(user_id[0]) <= MAX_ID_RESERVED and current_user is not None:
+            with AuthenticationManager() as auth_manager:
+                current_user_id = auth_manager.get_user(current_user)['id']
+
+            if current_user_id > MAX_ID_RESERVED:
+                raise WazuhError(5011)
+
     result = AffectedItemsWazuhResult(all_msg='User was successfully updated',
                                       none_msg='User could not be updated')
     with AuthenticationManager() as auth:
@@ -257,7 +271,7 @@ def remove_users(user_ids: list) -> AffectedItemsWazuhResult:
         for user_id in user_ids:
             user_id = int(user_id)
             current_user = auth.get_user(common.current_user.get())
-            if not isinstance(current_user, bool) and user_id == int(current_user['id']) and user_id > max_id_reserved:
+            if not isinstance(current_user, bool) and user_id == int(current_user['id']) and user_id > MAX_ID_RESERVED:
                 result.add_failed_item(id_=user_id, error=WazuhError(5008))
                 continue
             user = auth.get_user_id(user_id)
@@ -281,7 +295,8 @@ def remove_users(user_ids: list) -> AffectedItemsWazuhResult:
                   post_proc_kwargs={'exclude_codes': [4002]})
 def get_roles(role_ids: list = None, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort_by: dict = None,
               select: str = None, sort_ascending: bool = True, search_text: str = None,
-              complementary_search: bool = False, search_in_fields: list = None) -> AffectedItemsWazuhResult:
+              complementary_search: bool = False, search_in_fields: list = None,
+              q: str = None, distinct: bool = False) -> AffectedItemsWazuhResult:
     """Return information from all system roles, does not return information from its associated policies.
 
     Parameters
@@ -304,6 +319,10 @@ def get_roles(role_ids: list = None, offset: int = 0, limit: int = common.DATABA
         Find items without the text to search.
     search_in_fields : list
         Fields to search in.
+    q : str
+        Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -325,7 +344,8 @@ def get_roles(role_ids: list = None, offset: int = 0, limit: int = common.DATABA
 
     data = process_array(affected_items, search_text=search_text, search_in_fields=search_in_fields, select=select,
                          complementary_search=complementary_search, sort_by=sort_by, sort_ascending=sort_ascending,
-                         offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS, required_fields=REQUIRED_FIELDS)
+                         offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS, required_fields=REQUIRED_FIELDS,
+                         q=q, distinct=distinct)
     result.affected_items = data['items']
     result.total_affected_items = data['totalItems']
 
@@ -447,7 +467,8 @@ def update_role(role_id: str = None, name: str = None) -> AffectedItemsWazuhResu
                   post_proc_kwargs={'exclude_codes': [4007]})
 def get_policies(policy_ids: list, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort_by: dict = None,
                  select: str = None, sort_ascending: bool = True, search_text: str = None,
-                 complementary_search: bool = False, search_in_fields: list = None) -> AffectedItemsWazuhResult:
+                 complementary_search: bool = False, search_in_fields: list = None,
+                 q: str = None, distinct: bool = False) -> AffectedItemsWazuhResult:
     """Return the information of a certain policy.
 
     Parameters
@@ -470,6 +491,10 @@ def get_policies(policy_ids: list, offset: int = 0, limit: int = common.DATABASE
         Find items without the text to search.
     search_in_fields : list
         Fields to search in.
+    q : str
+        Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -491,7 +516,8 @@ def get_policies(policy_ids: list, offset: int = 0, limit: int = common.DATABASE
 
     data = process_array(affected_items, search_text=search_text, search_in_fields=search_in_fields, select=select,
                          complementary_search=complementary_search, sort_by=sort_by, sort_ascending=sort_ascending,
-                         offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS, required_fields=REQUIRED_FIELDS)
+                         offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS, required_fields=REQUIRED_FIELDS,
+                         q=q, distinct=distinct)
     result.affected_items = data['items']
     result.total_affected_items = data['totalItems']
 
@@ -620,7 +646,8 @@ def update_policy(policy_id: str = None, name: str = None, policy: dict = None) 
                   post_proc_kwargs={'exclude_codes': [4022]})
 def get_rules(rule_ids: list = None, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort_by: dict = None,
               select: str = None, sort_ascending: bool = True, search_text: str = None,
-              complementary_search: bool = False, search_in_fields: list = None) -> AffectedItemsWazuhResult:
+              complementary_search: bool = False, search_in_fields: list = None,
+              q: str = '', distinct: bool = False) -> AffectedItemsWazuhResult:
     """Return information from all the security rules. It does not return information from its associated roles.
 
     Parameters
@@ -643,6 +670,10 @@ def get_rules(rule_ids: list = None, offset: int = 0, limit: int = common.DATABA
         Find items without the text to search.
     search_in_fields : list
         Fields to search in.
+    q : str
+        Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -665,7 +696,8 @@ def get_rules(rule_ids: list = None, offset: int = 0, limit: int = common.DATABA
 
     data = process_array(affected_items, search_text=search_text, search_in_fields=search_in_fields, select=select,
                          complementary_search=complementary_search, sort_by=sort_by, sort_ascending=sort_ascending,
-                         offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS, required_fields=REQUIRED_FIELDS)
+                         offset=offset, limit=limit, allowed_sort_fields=SORT_FIELDS, required_fields=REQUIRED_FIELDS,
+                         q=q, distinct=distinct)
     result.affected_items = data['items']
     result.total_affected_items = data['totalItems']
 

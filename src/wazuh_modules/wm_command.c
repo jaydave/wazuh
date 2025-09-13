@@ -22,12 +22,13 @@ cJSON *wm_command_dump(const wm_command_t * command);
 // Command module context definition
 
 const wm_context WM_COMMAND_CONTEXT = {
-    "command",
-    (wm_routine)wm_command_main,
-    (void(*)(void *))wm_command_destroy,
-    (cJSON * (*)(const void *))wm_command_dump,
-    NULL,
-    NULL
+    .name = "command",
+    .start = (wm_routine)wm_command_main,
+    .destroy = (void(*)(void *))wm_command_destroy,
+    .dump = (cJSON * (*)(const void *))wm_command_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 // Module module main function. It won't return.
@@ -74,7 +75,7 @@ void * wm_command_main(wm_command_t * command) {
     #endif
         binary = argv[0];
 
-        if (!wm_get_path(binary, &full_path)) {
+        if (get_binary_path(binary, &full_path) == OS_INVALID) {
             mterror(WM_COMMAND_LOGTAG, "Cannot check binary: '%s'. Cannot stat binary file.", binary);
             pthread_exit(NULL);
         }

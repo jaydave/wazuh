@@ -16,6 +16,15 @@
 #include "sym_load.h"
 #include "defs.h"
 #include "mq_op.h"
+#include "headers/logging_helper.h"
+#include "commonDefs.h"
+
+#ifndef CLIENT
+#include "router.h"
+#include "utils/flatbuffers/include/syscollector_synchronization_schema.h"
+#include "utils/flatbuffers/include/syscollector_deltas_schema.h"
+#include "agent_messages_adapter.h"
+#endif // CLIENT
 
 #ifdef WIN32
 static DWORD WINAPI wm_sys_main(void *arg);         // Module main function. It won't return
@@ -27,19 +36,20 @@ static void wm_sys_stop(wm_sys_t *sys);         // Module stopper
 const char *WM_SYS_LOCATION = "syscollector";   // Location field for event sending
 cJSON *wm_sys_dump(const wm_sys_t *sys);
 int wm_sync_message(const char *data);
-pthread_cond_t sys_stop_condition;
-pthread_mutex_t sys_stop_mutex;
+pthread_cond_t sys_stop_condition = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t sys_stop_mutex = PTHREAD_MUTEX_INITIALIZER;
 bool need_shutdown_wait = false;
-pthread_mutex_t sys_reconnect_mutex;
+pthread_mutex_t sys_reconnect_mutex = PTHREAD_MUTEX_INITIALIZER;
 bool shutdown_process_started = false;
 
 const wm_context WM_SYS_CONTEXT = {
-    "syscollector",
-    (wm_routine)wm_sys_main,
-    (void(*)(void *))wm_sys_destroy,
-    (cJSON * (*)(const void *))wm_sys_dump,
-    (int(*)(const char*))wm_sync_message,
-    (void(*)(void *))wm_sys_stop
+    .name = "syscollector",
+    .start = (wm_routine)wm_sys_main,
+    .destroy = (void(*)(void *))wm_sys_destroy,
+    .dump = (cJSON * (*)(const void *))wm_sys_dump,
+    .sync = (int(*)(const char*))wm_sync_message,
+    .stop = (void(*)(void *))wm_sys_stop,
+    .query = NULL,
 };
 
 void *syscollector_module = NULL;
@@ -47,7 +57,17 @@ syscollector_start_func syscollector_start_ptr = NULL;
 syscollector_stop_func syscollector_stop_ptr = NULL;
 syscollector_sync_message_func syscollector_sync_message_ptr = NULL;
 
-long syscollector_sync_max_eps = 10;    // Database syncrhonization number of events per seconds (default value)
+#ifndef CLIENT
+void *router_module_ptr = NULL;
+router_provider_create_func router_provider_create_func_ptr = NULL;
+router_provider_send_fb_func router_provider_send_fb_func_ptr = NULL;
+ROUTER_PROVIDER_HANDLE rsync_handle = NULL;
+ROUTER_PROVIDER_HANDLE syscollector_handle = NULL;
+char *manager_node_name = NULL;
+int disable_manager_scan = 0;
+#endif // CLIENT
+
+long syscollector_sync_max_eps = 10;    // Database synchronization number of events per second (default value)
 int queue_fd = 0;                       // Output queue file descriptor
 
 static bool is_shutdown_process_started() {
@@ -82,29 +102,30 @@ static void wm_sys_send_message(const void* data, const char queue_id) {
 
 static void wm_sys_send_diff_message(const void* data) {
     wm_sys_send_message(data, SYSCOLLECTOR_MQ);
+#ifndef CLIENT
+    if(!disable_manager_scan)
+    {
+        char* msg_to_send = adapt_delta_message(data, "localhost", "000", "127.0.0.1", manager_node_name, NULL);
+        if (msg_to_send && router_provider_send_fb_func_ptr) {
+            router_provider_send_fb_func_ptr(syscollector_handle, msg_to_send, syscollector_deltas_SCHEMA);
+        }
+        cJSON_free(msg_to_send);
+    }
+#endif // CLIENT
 }
 
 static void wm_sys_send_dbsync_message(const void* data) {
     wm_sys_send_message(data, DBSYNC_MQ);
-}
-
-static void wm_sys_log(const syscollector_log_level_t level, const char* log) {
-
-    switch(level) {
-        case SYS_LOG_ERROR:
-            mterror(WM_SYS_LOGTAG, "%s", log);
-            break;
-        case SYS_LOG_INFO:
-            mtinfo(WM_SYS_LOGTAG, "%s", log);
-            break;
-        case SYS_LOG_DEBUG:
-            mtdebug1(WM_SYS_LOGTAG, "%s", log);
-            break;
-        case SYS_LOG_DEBUG_VERBOSE:
-            mtdebug2(WM_SYS_LOGTAG, "%s", log);
-            break;
-        default:;
+#ifndef CLIENT
+    if(!disable_manager_scan)
+    {
+        char* msg_to_send = adapt_sync_message(data, "localhost", "000", "127.0.0.1", manager_node_name, NULL);
+        if (msg_to_send && router_provider_send_fb_func_ptr) {
+            router_provider_send_fb_func_ptr(rsync_handle, msg_to_send, syscollector_synchronization_SCHEMA);
+        }
+        cJSON_free(msg_to_send);
     }
+#endif // CLIENT
 }
 
 static void wm_sys_log_config(wm_sys_t *sys)
@@ -150,6 +171,34 @@ void* wm_sys_main(wm_sys_t *sys) {
         syscollector_start_ptr = so_get_function_sym(syscollector_module, "syscollector_start");
         syscollector_stop_ptr = so_get_function_sym(syscollector_module, "syscollector_stop");
         syscollector_sync_message_ptr = so_get_function_sym(syscollector_module, "syscollector_sync_message");
+
+        void* rsync_module = NULL;
+        if(rsync_module = so_check_module_loaded("rsync"), rsync_module) {
+            rsync_initialize_full_log_func rsync_initialize_log_function_ptr = so_get_function_sym(rsync_module, "rsync_initialize_full_log_function");
+            if(rsync_initialize_log_function_ptr) {
+                rsync_initialize_log_function_ptr(mtLoggingFunctionsWrapper);
+            }
+            // Even when the RTLD_NOLOAD flag was used for dlopen(), we need a matching call to dlclose()
+#ifndef WIN32
+            so_free_library(rsync_module);
+#endif
+        }
+#ifndef CLIENT
+        // Load router module only for manager if is enabled
+        disable_manager_scan = getDefine_Int("vulnerability-detection", "disable_scan_manager",0 ,1);
+        if (router_module_ptr = so_get_module_handle("router"), router_module_ptr) {
+                router_provider_create_func_ptr = so_get_function_sym(router_module_ptr, "router_provider_create");
+                router_provider_send_fb_func_ptr = so_get_function_sym(router_module_ptr, "router_provider_send_fb");
+                if (router_provider_create_func_ptr && router_provider_send_fb_func_ptr) {
+                    mtdebug1(WM_SYS_LOGTAG, "Router module loaded.");
+                } else {
+                    mwarn("Failed to load methods from router module.");
+                }
+            } else {
+                mwarn("Failed to load router module.");
+            }
+            manager_node_name = get_node_name();
+#endif // CLIENT
     } else {
 #ifdef __hpux
         mtinfo(WM_SYS_LOGTAG, "Not supported in HP-UX.");
@@ -169,10 +218,22 @@ void* wm_sys_main(wm_sys_t *sys) {
         }
         // else: if max_eps is 0 (from configuration) let's use the default max_eps value (10)
         wm_sys_log_config(sys);
+#ifndef CLIENT
+        // Router providers initialization
+        if (router_provider_create_func_ptr){
+            if(syscollector_handle = router_provider_create_func_ptr("deltas-syscollector", true), !syscollector_handle) {
+                mdebug2("Failed to create router handle for 'syscollector'.");
+            }
+
+            if (rsync_handle = router_provider_create_func_ptr("rsync-syscollector", true), !rsync_handle) {
+                mdebug2("Failed to create router handle for 'rsync'.");
+            }
+        }
+#endif // CLIENT
         syscollector_start_ptr(sys->interval,
                                wm_sys_send_diff_message,
                                wm_sys_send_dbsync_message,
-                               wm_sys_log,
+                               taggedLogFunction,
                                SYSCOLLECTOR_DB_DISK_PATH,
                                SYSCOLLECTOR_NORM_CONFIG_DISK_PATH,
                                SYSCOLLECTOR_NORM_TYPE,
@@ -198,6 +259,11 @@ void* wm_sys_main(wm_sys_t *sys) {
         queue_fd = 0;
     }
     so_free_library(syscollector_module);
+#ifndef CLIENT
+    so_free_library(router_module_ptr);
+    router_module_ptr = NULL;
+    os_free(manager_node_name);
+#endif // CLIENT
     syscollector_module = NULL;
     mtinfo(WM_SYS_LOGTAG, "Module finished.");
     w_mutex_lock(&sys_stop_mutex);

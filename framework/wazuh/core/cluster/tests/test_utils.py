@@ -1,3 +1,7 @@
+# Copyright (C) 2015, Wazuh Inc.
+# Created by Wazuh, Inc. <info@wazuh.com>.
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import logging
 import os
 import sys
@@ -204,13 +208,12 @@ def test_get_cluster_items():
                                'excluded_extensions': ['~', '.tmp', '.lock', '.swp']},
                      'intervals': {'worker': {'sync_integrity': 9, 'sync_agent_info': 10, 'sync_agent_groups': 30,
                                               'keep_alive': 60, 'connection_retry': 10, 'timeout_agent_groups': 40,
-                                              'max_failed_keepalive_attempts': 2},
+                                              'max_failed_keepalive_attempts': 2, "agent_groups_mismatch_limit": 5},
                                    'master': {'timeout_extra_valid': 40, 'recalculate_integrity': 8,
                                               'check_worker_lastkeepalive': 60,
                                               'max_allowed_time_without_keepalive': 120, 'process_pool_size': 2,
-                                              'sync_agent_groups': 10, 'timeout_agent_groups': 40,
-                                              'timeout_agent_info': 40, 'max_locked_integrity_time': 1000,
-                                              'agent_group_start_delay': 30},
+                                              'sync_agent_groups': 10, 'timeout_agent_info': 40,
+                                              'max_locked_integrity_time': 1000, 'agent_group_start_delay': 30},
                                    'communication': {'timeout_cluster_request': 20, 'timeout_dapi_request': 200,
                                                      'timeout_receiving_file': 120, 'min_zip_size': 31457280,
                                                      'max_zip_size': 1073741824, 'compress_level': 1,
@@ -239,6 +242,27 @@ def test_ClusterLogger():
     assert cluster_logger.logger.level == logging.DEBUG
 
     os.path.exists(current_logger_path) and os.remove(current_logger_path)
+
+
+def test_log_subprocess_execution():
+    """Check that the passed messages from subprocesses are logged with the expected level."""
+    logs = {'debug': {'example_debug': ["Debug level message."]},
+            'debug2': {'example_debug2': ["Debug2 level message."]},
+            'warning': {'example_debug2': ["Warning level message."]},
+            'error': {'example_error': ["Error level message."]},
+            'generic_errors': ['First generic error to be logged', 'Second generic error to be logged'],
+            }
+    with patch.object(utils.logger, 'debug') as debug_logger, \
+            patch.object(utils.logger, 'debug2') as debug2_logger, \
+            patch.object(utils.logger, 'warning') as warning_logger, \
+            patch.object(utils.logger, 'error') as error_logger:
+        utils.log_subprocess_execution(utils.logger, logs)
+        debug_logger.assert_called_with(f"{dict(logs['debug'])}")
+        debug2_logger.assert_called_with(f"{dict(logs['debug2'])}")
+        warning_logger.assert_called_with(f"{dict(logs['warning'])}")
+        error_logger.assert_any_call(f"{dict(logs['error'])}")
+        for error in logs['generic_errors']:
+            error_logger.assert_any_call(error, exc_info=False)
 
 
 @patch('os.getpid', return_value=0000)
@@ -286,3 +310,24 @@ async def test_forward_function(distributed_api_mock, concurrent_mock):
     assert await utils.forward_function(auxiliary_func) == DAPIMock().result()
     distributed_api_mock.assert_called_once()
     concurrent_mock.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'cluster_config,expected',
+    (
+        [{'disabled': False, 'node_type': 'master'}, True],
+        [{'disabled': False, 'node_type': 'worker'}, False],
+        [{'disabled': True, 'node_type': 'master'}, True],
+        [{'disabled': True, 'node_type': 'worker'}, True],
+    )
+)
+@patch('wazuh.core.cluster.utils.read_cluster_config')
+def test_running_on_master_node(read_cluster_config_mock, cluster_config, expected):
+    """
+    Test that running_on_master function returns the expected value,
+    based on combinations of disabled/enabled and node type.
+    """
+
+    read_cluster_config_mock.return_value = cluster_config
+
+    assert utils.running_in_master_node() == expected

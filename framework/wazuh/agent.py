@@ -10,7 +10,8 @@ from typing import Union
 from wazuh.core import common, configuration
 from wazuh.core.InputValidator import InputValidator
 from wazuh.core.agent import WazuhDBQueryAgents, WazuhDBQueryGroupByAgents, WazuhDBQueryMultigroups, Agent, \
-    WazuhDBQueryGroup, create_upgrade_tasks, get_agents_info, get_groups, get_rbac_filters, send_restart_command
+    WazuhDBQueryGroup, create_upgrade_tasks, get_agents_info, get_groups, get_rbac_filters, send_restart_command, \
+    GROUP_FIELDS, GROUP_REQUIRED_FIELDS, GROUP_FILES_FIELDS, GROUP_FILES_REQUIRED_FIELDS
 from wazuh.core.cluster.cluster import get_node
 from wazuh.core.cluster.utils import read_cluster_config
 from wazuh.core.exception import WazuhError, WazuhInternalError, WazuhException, WazuhResourceNotFound
@@ -298,7 +299,7 @@ def restart_agents_by_group(agent_list: list = None) -> AffectedItemsWazuhResult
                   post_proc_kwargs={'exclude_codes': [1701]})
 def get_agents(agent_list: list = None, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort: dict = None,
                search: dict = None, select: dict = None, filters: dict = None,
-               q: str = None) -> AffectedItemsWazuhResult:
+               q: str = None, distinct: bool = False) -> AffectedItemsWazuhResult:
     """Gets a list of available agents with basic attributes.
 
     Parameters
@@ -319,6 +320,8 @@ def get_agents(agent_list: list = None, offset: int = 0, limit: int = common.DAT
         Defines required field filters. Format: {"field1":"value1", "field2":["value2","value3"]}
     q : str
         Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -342,7 +345,7 @@ def get_agents(agent_list: list = None, offset: int = 0, limit: int = common.DAT
         rbac_filters = get_rbac_filters(system_resources=system_agents, permitted_resources=agent_list, filters=filters)
 
         with WazuhDBQueryAgents(offset=offset, limit=limit, sort=sort, search=search, select=select,
-                                query=q, **rbac_filters) as db_query:
+                                query=q, **rbac_filters, distinct=distinct) as db_query:
             data = db_query.run()
 
         result.affected_items.extend(data['items'])
@@ -354,7 +357,7 @@ def get_agents(agent_list: list = None, offset: int = 0, limit: int = common.DAT
 @expose_resources(actions=["group:read"], resources=["group:id:{group_list}"], post_proc_func=None)
 def get_agents_in_group(group_list: list, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort: dict = None,
                         search: dict = None, select: dict = None, filters: dict = None,
-                        q: str = None) -> AffectedItemsWazuhResult:
+                        q: str = None, distinct: bool = False) -> AffectedItemsWazuhResult:
     """Gets a list of available agents with basic attributes.
 
     Parameters
@@ -375,6 +378,8 @@ def get_agents_in_group(group_list: list, offset: int = 0, limit: int = common.D
         Defines required field filters. Format: {"field1":"value1", "field2":["value2","value3"]}
     q : str
         Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Raises
     ------
@@ -391,9 +396,11 @@ def get_agents_in_group(group_list: list, offset: int = 0, limit: int = common.D
     if group_list[0] not in system_groups:
         raise WazuhResourceNotFound(1710)
 
-    q = 'group=' + group_list[0] + (';' + q if q else '')
+    q_group = f'group={group_list[0]}'
+    q = f'{q_group};({q})' if q else q_group
 
-    return get_agents(offset=offset, limit=limit, sort=sort, search=search, select=select, filters=filters, q=q)
+    return get_agents(offset=offset, limit=limit, sort=sort, search=search, select=select, filters=filters, q=q,
+     distinct=distinct)
 
 
 @expose_resources(actions=["agent:read"], resources=["agent:id:{agent_list}"],
@@ -550,8 +557,10 @@ def add_agent(name: str = None, agent_id: str = None, key: str = None, ip: str =
 
 @expose_resources(actions=["group:read"], resources=["group:id:{group_list}"],
                   post_proc_kwargs={'exclude_codes': [1710]})
-def get_agent_groups(group_list: list = None, offset: int = 0, limit: int = None, sort: dict = None,
-                     search: dict = None, hash_algorithm: str = 'md5') -> AffectedItemsWazuhResult:
+def get_agent_groups(group_list: list = None, offset: int = 0, limit: int = None, sort_by: list = None,
+                     sort_ascending: bool = True, search_text: str = None, complementary_search: bool = False,
+                     hash_algorithm: str = 'md5', q: str = None, select: str = None,
+                     distinct: bool = False) -> AffectedItemsWazuhResult:
     """Gets the existing groups.
 
     Parameters
@@ -562,12 +571,22 @@ def get_agent_groups(group_list: list = None, offset: int = 0, limit: int = None
         First element to return in the collection.
     limit : int
         Maximum number of elements to return. Default: common.DATABASE_LIMIT
-    sort : dict
-        Sorts the items. Format: {"fields":["field1","field2"],"order":"asc|desc"}.
-    search : dict
-        Look for elements with the specified string. Format: {"fields": ["field1","field2"]}
+    sort_by : list
+        Fields to sort the items by.
+    sort_ascending : bool
+        Sort in ascending (true) or descending (false) order. Default: True
+    search_text : str
+        Text to search.
+    complementary_search : bool
+        Find items without the text to search. Default: False
     hash_algorithm : str
         hash algorithm used to get mergedsum and configsum. Default: 'md5'
+    q : str
+        Query to filter results by.
+    select : str
+        Select which fields to return (separated by comma).
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -579,8 +598,8 @@ def get_agent_groups(group_list: list = None, offset: int = 0, limit: int = None
                                       some_msg='Some groups information was not returned',
                                       none_msg='No group information was returned'
                                       )
-    if group_list:
 
+    if group_list:
         system_groups = get_groups()
         # Add failed items
         for invalid_group in set(group_list) - system_groups:
@@ -588,25 +607,32 @@ def get_agent_groups(group_list: list = None, offset: int = 0, limit: int = None
 
         rbac_filters = get_rbac_filters(system_resources=system_groups, permitted_resources=group_list)
 
-        with WazuhDBQueryGroup(offset=offset, limit=limit, sort=sort, search=search, **rbac_filters) as group_query:
+        with WazuhDBQueryGroup(**rbac_filters, limit=None) as group_query:
             query_data = group_query.run()
 
-        for group in query_data['items']:
-            full_entry = path.join(common.SHARED_PATH, group['name'])
+            for group in query_data['items']:
+                if group_list and group['name'] not in group_list:
+                    continue
 
-            # merged.mg and agent.conf sum
-            merged_sum = get_hash(path.join(full_entry, "merged.mg"), hash_algorithm)
-            conf_sum = get_hash(path.join(full_entry, "agent.conf"), hash_algorithm)
+                full_entry = path.join(common.SHARED_PATH, group['name'])
 
-            if merged_sum:
-                group['mergedSum'] = merged_sum
+                # merged.mg and agent.conf sum
+                merged_sum = get_hash(path.join(full_entry, "merged.mg"), hash_algorithm)
+                if merged_sum:
+                    group['mergedSum'] = merged_sum
 
-            if conf_sum:
-                group['configSum'] = conf_sum
-            affected_groups.append(group)
+                conf_sum = get_hash(path.join(full_entry, "agent.conf"), hash_algorithm)
+                if conf_sum:
+                    group['configSum'] = conf_sum
 
-        result.affected_items = affected_groups
-        result.total_affected_items = query_data['totalItems']
+                affected_groups.append(group)
+
+        data = process_array(affected_groups, offset=offset, limit=limit, allowed_sort_fields=GROUP_FIELDS,
+                            sort_by=sort_by, sort_ascending=sort_ascending, search_text=search_text,
+                            complementary_search=complementary_search, q=q, allowed_select_fields=GROUP_FIELDS,
+                            select=select, distinct=distinct, required_fields=GROUP_REQUIRED_FIELDS)
+        result.affected_items = data['items']
+        result.total_affected_items = data['totalItems']
 
     return result
 
@@ -614,7 +640,8 @@ def get_agent_groups(group_list: list = None, offset: int = 0, limit: int = None
 @expose_resources(actions=["group:read"], resources=["group:id:{group_list}"], post_proc_func=None)
 def get_group_files(group_list: list = None, offset: int = 0, limit: int = None, search_text: str = None,
                     search_in_fields: list = None, complementary_search: bool = False, sort_by: list = None,
-                    sort_ascending: bool = True, hash_algorithm: str = 'md5') -> WazuhResult:
+                    sort_ascending: bool = True, hash_algorithm: str = 'md5', q: str = None,
+                    select: str = None, distinct: bool = False) -> WazuhResult:
     """Gets the group files.
 
     Parameters
@@ -637,6 +664,13 @@ def get_group_files(group_list: list = None, offset: int = 0, limit: int = None,
         First element to return.
     limit : int
         Maximum number of elements to return
+    q : str
+        Query to filter results by.
+    select : str
+        Select which fields to return (separated by comma).
+        Maximum number of elements to return.
+    distinct : bool
+        Look for distinct values.
 
     Raises
     ------
@@ -681,7 +715,9 @@ def get_group_files(group_list: list = None, offset: int = 0, limit: int = None,
         data.append({'filename': "ar.conf", 'hash': get_hash(ar_path, hash_algorithm)})
         data = process_array(data, search_text=search_text, search_in_fields=search_in_fields,
                              complementary_search=complementary_search, sort_by=sort_by,
-                             sort_ascending=sort_ascending, offset=offset, limit=limit)
+                             sort_ascending=sort_ascending, offset=offset, limit=limit, q=q, select=select,
+                             allowed_select_fields=GROUP_FILES_FIELDS, distinct=distinct,
+                             required_fields=GROUP_FILES_REQUIRED_FIELDS)
         result.affected_items = data['items']
         result.total_affected_items = data['totalItems']
     except WazuhError as e:
@@ -773,22 +809,12 @@ def delete_groups(group_list: list = None) -> AffectedItemsWazuhResult:
                 raise WazuhResourceNotFound(1710)
             elif group_id == 'default':
                 raise WazuhError(1712)
-            with WazuhDBQueryMultigroups(group_id=group_id, limit=None) as db_query:
-                agent_list = [agent['id'] for agent in db_query.run()['items']]
 
-            try:
-                affected_agents_result = remove_agents_from_group(agent_list=agent_list, group_list=[group_id])
-                if affected_agents_result.total_failed_items != 0:
-                    raise WazuhError(4015)
-            except WazuhError:
-                raise WazuhError(4015)
             Agent.delete_single_group(group_id)
-            affected_agents_result.affected_items.sort(key=int)
-            result.affected_items.append({group_id: affected_agents_result.affected_items})
+            result.affected_items.append(group_id)
         except WazuhException as e:
             result.add_failed_item(id_=group_id, error=e)
 
-    result.affected_items.sort(key=lambda x: next(iter(x)))
     result.total_affected_items = len(result.affected_items)
 
     return result
@@ -1016,7 +1042,7 @@ def remove_agents_from_group(agent_list: list = None, group_list: list = None) -
 
 @expose_resources(actions=["agent:read"], resources=["agent:id:{agent_list}"], post_proc_func=None)
 def get_outdated_agents(agent_list: list = None, offset: int = 0, limit: int = common.DATABASE_LIMIT, sort: dict = None,
-                        search: dict = None, select: dict = None, q: str = None) -> AffectedItemsWazuhResult:
+                        search: dict = None, select: str = None, q: str = None) -> AffectedItemsWazuhResult:
     """Gets the outdated agents.
 
     Parameters
@@ -1031,8 +1057,8 @@ def get_outdated_agents(agent_list: list = None, offset: int = 0, limit: int = c
         Sorts the items. Format: {"fields":["field1","field2"],"order":"asc|desc"}.
     search : dict
         Looks for items with the specified string. Format: {"fields": ["field1","field2"]}.
-    select : dict
-        Select fields to return. Format: {"fields":["field1","field2"]}.
+    select : str
+        Select which fields to return (separated by comma).
     q : str
         Query to filter results by. For example q&#x3D;&amp;quot;status&#x3D;active&amp;quot;
 
@@ -1051,7 +1077,6 @@ def get_outdated_agents(agent_list: list = None, offset: int = 0, limit: int = c
         manager = Agent(id='000')
         manager.load_info_from_db()
 
-        select = ['version', 'id', 'name'] if select is None else select
         rbac_filters = get_rbac_filters(system_resources=get_agents_info(), permitted_resources=agent_list)
 
         with WazuhDBQueryAgents(offset=offset, limit=limit, sort=sort, search=search, select=select,
@@ -1081,7 +1106,7 @@ def upgrade_agents(agent_list: list = None, wpk_repo: str = None, version: str =
     version : str
         Version to upgrade to.
     force : bool
-        force the update even if it is a downgrade.
+        Forces the agents to upgrade, ignoring version validations.
     use_http : bool
         False for HTTPS protocol, True for HTTP protocol.
     file_path : str
@@ -1152,7 +1177,7 @@ def upgrade_agents(agent_list: list = None, wpk_repo: str = None, version: str =
         eligible_agents = [int(agent) for agent in eligible_agents]
 
         tasks_results = create_upgrade_tasks(eligible_agents=eligible_agents, chunk_size=UPGRADE_CHUNK_SIZE,
-                                             command='upgrade' if not installer or file_path else 'upgrade_custom',
+                                             command='upgrade' if not (installer or file_path) else 'upgrade_custom',
                                              wpk_repo=wpk_repo, version=version, force=force, use_http=use_http,
                                              file_path=file_path, installer=installer)
 
@@ -1374,7 +1399,7 @@ def get_agents_sync_group(agent_list: list = None) -> AffectedItemsWazuhResult:
 
 
 @expose_resources(actions=["group:read"], resources=["group:id:{group_list}"], post_proc_func=None)
-def get_file_conf(group_list: list = None, type_conf: str = None, return_format: str = None,
+def get_file_conf(group_list: list = None, type_conf: str = None, raw: bool = False,
                   filename: str = None) -> WazuhResult:
     """Read configuration file for a specified group.
 
@@ -1384,8 +1409,8 @@ def get_file_conf(group_list: list = None, type_conf: str = None, return_format:
         List with the group ID.
     type_conf : str
         Type of file.
-    return_format : str
-        Format of the answer (xml or json).
+    raw : bool
+        Respond in raw format.
     filename : str
         Filename to read config from.
 
@@ -1399,7 +1424,7 @@ def get_file_conf(group_list: list = None, type_conf: str = None, return_format:
     group_id = group_list[0]
 
     return WazuhResult({'data': configuration.get_file_conf(filename, group_id=group_id, type_conf=type_conf,
-                                                            return_format=return_format)})
+                                                            raw=raw)})
 
 
 @expose_resources(actions=["group:read"], resources=["group:id:{group_list}"], post_proc_func=None)

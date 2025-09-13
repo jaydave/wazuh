@@ -14,7 +14,7 @@ SCA_CHECK_DB_FIELDS = MappingProxyType(
     {'policy_id': 'policy_id', 'id': 'id', 'title': 'title', 'description': 'description', 'rationale': 'rationale',
      'remediation': 'remediation', 'file': 'file', 'process': 'process', 'directory': 'directory',
      'registry': 'registry', 'command': 'command', 'references': '`references`', 'result': 'result',
-     'status': '`status`', 'reason': 'reason', 'condition': 'condition'})
+     'reason': 'reason', 'condition': 'condition'})
 
 SCA_CHECK_COMPLIANCE_DB_FIELDS = MappingProxyType(
     {'compliance.key': 'key', 'compliance.value': 'value', 'id_check': 'id_check'})
@@ -193,6 +193,13 @@ class WazuhDBQuerySCACheckIDs(WazuhDBQuerySCA):
                                  query=policy_query_filter if not query else f"{policy_query_filter};{query}",
                                  search=search, count=True, get_data=True, select=[], default_query=self.DEFAULT_QUERY,
                                  fields=fields, default_sort_field='id', default_sort_order='ASC')
+
+    @staticmethod
+    def _pass_filter(field, value):
+        # Overwrite method to avoid skipping queries like 'condition=all'
+        if field == 'condition':
+            return False
+        return value == 'all'
 
 
 class WazuhDBQuerySCACheckRelational(WazuhDBQuerySCA):

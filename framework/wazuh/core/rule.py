@@ -3,6 +3,7 @@
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import os
+import re
 from enum import Enum
 from glob import glob
 
@@ -18,6 +19,8 @@ DYNAMIC_OPTIONS = {'regex', 'field', 'match', 'action', 'extra_data', 'hostname'
                    'extra_data', 'srcgeoip', 'dstgeoip'}
 RULE_FIELDS = ['description', 'details', 'filename', 'gdpr', 'groups', 'id', 'level', 'relative_dirname', 'pci_dss',
                'status', 'gpg13', 'hipaa', 'nist_800_53', 'tsc', 'mitre']
+RULE_FILES_FIELDS = ['filename', 'relative_dirname', 'status']
+RULE_FILES_REQUIRED_FIELDS = ['filename']
 
 
 class Status(Enum):
@@ -88,15 +91,18 @@ def set_groups(groups: list, general_groups: list, rule: dict):
         Rule to be updated.
     """
     groups.extend(general_groups)
-    for g in groups:
+    for group in groups:
+        # These characters are the ones Core replaces when reading XML tags
+        group = group.strip()
+        group = re.sub('[\n\r]+', '', group)
         for req in RULE_REQUIREMENTS:
-            if g.startswith(req):
+            if group.startswith(req):
                 # We add the requirement to the rule
-                rule[req].append(g[len(req) + 1:]) if g[len(req) + 1:] not in rule[req] else None
+                rule[req].append(group[len(req) + 1:]) if group[len(req) + 1:] not in rule[req] else None
                 break
         else:
             # If a requirement is not found we add it to the rule as group
-            rule['groups'].append(g) if g != '' else None
+            rule['groups'].append(group) if group != '' else None
 
 
 def load_rules_from_file(rule_filename: str, rule_relative_path: str, rule_status: str) -> list:
@@ -127,6 +133,13 @@ def load_rules_from_file(rule_filename: str, rule_relative_path: str, rule_statu
         rules = list()
         root = load_wazuh_xml(os.path.join(common.WAZUH_PATH, rule_relative_path, rule_filename))
 
+        # Get variables in dict format {varname: value} (will only be used for id and level for now)
+        variables = {}
+        for vari in root.findall('var'):
+            name = "$" + vari.attrib.get('name')
+            value = vari.text
+            variables[name] = value
+
         for xml_group in list(root):
             if xml_group.tag.lower() == "group":
                 general_groups = xml_group.attrib['name'].split(',')
@@ -134,10 +147,15 @@ def load_rules_from_file(rule_filename: str, rule_relative_path: str, rule_statu
                     # New rule
                     if xml_rule.tag.lower() == "rule":
                         groups = list()
+
+                        # Replace values of id and level if variables exist
+                        id_value = int(variables.get(xml_rule.attrib['id'], xml_rule.attrib['id']))
+                        level_value = int(variables.get(xml_rule.attrib['level'], xml_rule.attrib['level']))
+
                         rule = {'filename': rule_filename, 'relative_dirname': rule_relative_path,
-                                'id': int(xml_rule.attrib['id']), 'level': int(xml_rule.attrib['level']),
-                                'status': rule_status, 'details': dict(), 'pci_dss': list(), 'gpg13': list(),
-                                'gdpr': list(), 'hipaa': list(), 'nist_800_53': list(), 'tsc': list(), 'mitre': list(),
+                                'id': id_value, 'level': level_value, 'status': rule_status,
+                                'details': dict(), 'pci_dss': list(), 'gpg13': list(), 'gdpr': list(),
+                                'hipaa': list(), 'nist_800_53': list(), 'tsc': list(), 'mitre': list(),
                                 'groups': list(), 'description': ''}
                         for k in xml_rule.attrib:
                             if k != 'id' and k != 'level':

@@ -14,7 +14,7 @@ from api.validator import (check_exp, check_xml, _alphanumeric_param, _array_num
                            _get_dirnames_path, allowed_fields, is_safe_path, _wazuh_version,
                            _symbols_alphanumeric_param, _base64, _group_names, _group_names_or_all, _iso8601_date,
                            _iso8601_date_time, _numbers_or_all, _cdb_filename_path, _xml_filename_path, _xml_filename,
-                           check_component_configuration_pair, _active_response_command)
+                           check_component_configuration_pair, _active_response_command, _wpk_path)
 from wazuh import WazuhError
 
 test_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
@@ -79,15 +79,16 @@ test_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data
     ('local_rules1.xml,local_rules2.xml', _xml_filename),
     ('scripts/active_response', _active_response_command),
     ('!scripts/active_response', _active_response_command),
+    ('correct.wpk', _wpk_path),
     # relative paths
     ('etc/lists/new_lists3', _get_dirnames_path),
     # version
-    ('v4.3.0', _wazuh_version),
-    ('4.3.0', _wazuh_version),
-    ('wazuh 4.3.0', _wazuh_version),
-    ('wazuh v4.3.0', _wazuh_version),
+    ('v4.4.0', _wazuh_version),
+    ('4.4.0', _wazuh_version),
+    ('wazuh 4.4.0', _wazuh_version),
+    ('wazuh v4.4.0', _wazuh_version),
     # miscellaneous
-    ('aHR0cHM6Ly9zdGFja2FidXNlLmNvbS90YWcvamF2YS8=', _base64)
+    ('aHR0cHM6Ly9zdGFja2FidXNlLmNvbS90YWcvamF2YS8=', _base64),
 ])
 def test_validation_check_exp_ok(exp, regex_name):
     """Verify that check_exp() returns True with correct params"""
@@ -108,6 +109,9 @@ def test_validation_check_exp_ok(exp, regex_name):
     ('all', _group_names),
     ('.', _group_names),
     ('..', _group_names),
+    ('解放加大了看', _group_names),
+    ('тестирование',_group_names),
+    ('בדיקה', _group_names),
     ('.', _group_names_or_all),
     ('..', _group_names_or_all),
     # IPs
@@ -144,6 +148,8 @@ def test_validation_check_exp_ok(exp, regex_name):
     ('/var/ossec/etc/rules/local_rules.xml()', _paths),
     ('!scripts/active_response()', _active_response_command),
     ('scripts\\active_response$', _active_response_command),
+    ('incorrect.txt', _wpk_path),
+    ('.wpk', _wpk_path),
     # relative paths
     ('etc/internal_options', _get_dirnames_path),
     ('../../path', _get_dirnames_path),
@@ -151,12 +157,12 @@ def test_validation_check_exp_ok(exp, regex_name):
     ('../ossec', _get_dirnames_path),
     ('etc/rules/../../../dir', _get_dirnames_path),
     # version
-    ('v4.3', _wazuh_version),
-    ('4.3', _wazuh_version),
-    ('wazuh 4.3', _wazuh_version),
-    ('wazuh v4.3', _wazuh_version),
+    ('v4.4', _wazuh_version),
+    ('4.4', _wazuh_version),
+    ('wazuh 4.4', _wazuh_version),
+    ('wazuh v4.4', _wazuh_version),
     # miscellaneous
-    ('aDhjasdh3=', _base64)
+    ('aDhjasdh3=', _base64),
 ])
 def test_validation_check_exp_ko(exp, regex_name):
     """Verify that check_exp() returns False with incorrect params"""

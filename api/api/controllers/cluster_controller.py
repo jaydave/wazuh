@@ -59,7 +59,7 @@ async def get_cluster_node(request, pretty: bool = False, wait_for_complete: boo
 
 async def get_cluster_nodes(request, pretty: bool = False, wait_for_complete: bool = False, offset: int = 0,
                             limit: int = None, sort: str = None, search: str = None, select: str = None,
-                            nodes_list: str = None, q: str = None) -> web.Response:
+                            nodes_list: str = None, q: str = None, distinct: bool = False) -> web.Response:
     """Get information about all nodes in the cluster or a list of them.
 
     Parameters
@@ -84,6 +84,8 @@ async def get_cluster_nodes(request, pretty: bool = False, wait_for_complete: bo
         List of node IDs.
     q : str
         Query to filter results by.
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -100,7 +102,8 @@ async def get_cluster_nodes(request, pretty: bool = False, wait_for_complete: bo
                 'search': parse_api_param(search, 'search'),
                 'select': select,
                 'filter_type': type_,
-                'q': q}
+                'q': q,
+                'distinct': distinct}
 
     nodes = raise_if_exc(await get_system_nodes())
     dapi = DistributedAPI(f=cluster.get_nodes_info,
@@ -416,7 +419,7 @@ async def get_daemon_stats_node(request, node_id: str, pretty: bool = False, wai
     dapi = DistributedAPI(f=stats.get_daemons_stats,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
                           request_type='distributed_master',
-                          is_async=False,
+                          is_async=True,
                           wait_for_complete=wait_for_complete,
                           logger=logger,
                           rbac_permissions=request['token_info']['rbac_policies'],
@@ -631,7 +634,7 @@ async def get_stats_remoted_node(request, node_id: str, pretty: bool = False,
 
 async def get_log_node(request, node_id: str, pretty: bool = False, wait_for_complete: bool = False, offset: int = 0,
                        limit: int = None, sort: str = None, search: str = None, tag: str = None, level: str = None,
-                       q: str = None) -> web.Response:
+                       q: str = None, select: str = None, distinct: bool = False) -> web.Response:
     """Get a specified node's wazuh logs.
 
     Returns the last 2000 wazuh log entries in node {node_id}.
@@ -660,6 +663,10 @@ async def get_log_node(request, node_id: str, pretty: bool = False, wait_for_com
         Filters by log level.
     q : str
         Query to filter results by.
+    select : str
+        Select which fields to return (separated by comma).
+    distinct : bool
+        Look for distinct values.
 
     Returns
     -------
@@ -675,7 +682,9 @@ async def get_log_node(request, node_id: str, pretty: bool = False, wait_for_com
                 'complementary_search': parse_api_param(search, 'search')['negation'] if search is not None else None,
                 'tag': tag,
                 'level': level,
-                'q': q}
+                'q': q,
+                'select': select,
+                'distinct': distinct}
 
     nodes = raise_if_exc(await get_system_nodes())
     dapi = DistributedAPI(f=manager.ossec_log,
@@ -884,7 +893,7 @@ async def get_node_config(request, node_id: str, component: str, wait_for_comple
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def update_configuration(request, node_id: str, body: dict, pretty: bool = False,
+async def update_configuration(request, node_id: str, body: bytes, pretty: bool = False,
                                wait_for_complete: bool = False) -> web.Response:
     """Update Wazuh configuration (ossec.conf) in node node_id.
 
@@ -893,7 +902,7 @@ async def update_configuration(request, node_id: str, body: dict, pretty: bool =
     request : connexion.request
     node_id : str
         Node ID.
-    body : dict
+    body : bytes
         New content for the Wazuh configuration (ossec.conf).
     pretty : bool
         Show results in human-readable format.

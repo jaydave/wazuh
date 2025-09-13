@@ -1,6 +1,7 @@
 # Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -134,7 +135,8 @@ origin_module: ContextVar[str] = ContextVar('origin_module', default='framework'
 try:
     mp_pools: ContextVar[Dict] = ContextVar('mp_pools', default={
         'process_pool': ProcessPoolExecutor(max_workers=1),
-        'authentication_pool': ProcessPoolExecutor(max_workers=1)
+        'authentication_pool': ProcessPoolExecutor(max_workers=1),
+        'events_pool': ProcessPoolExecutor(max_workers=1)
     })
 # Handle exception when the user running Wazuh cannot access /dev/shm.
 except (FileNotFoundError, PermissionError):
@@ -171,22 +173,6 @@ LISTS_EXTENSION = ''
 COMPILED_LISTS_EXTENSION = '.cdb'
 
 
-# ============================================ Wazuh constants - Metadata  =============================================
-try:
-    here = os.path.abspath(os.path.dirname(__file__))
-    with open(os.path.join(here, 'wazuh.json'), 'r') as f:
-        metadata = json.load(f)
-except (FileNotFoundError, PermissionError):
-    metadata = {
-        'install_type': 'server',
-        'installation_date': '',
-        'wazuh_version': ''
-    }
-WAZUH_INSTALL_TYPE = metadata['install_type']
-WAZUH_VERSION = metadata['wazuh_version']
-WAZUH_INSTALLATION_DATE = metadata['installation_date']
-
-
 # ========================================= Wazuh constants - Size and limits ==========================================
 MAX_SOCKET_BUFFER_SIZE = 64 * 1024  # 64KB.
 MAX_QUERY_FILTERS_RESERVED_SIZE = MAX_SOCKET_BUFFER_SIZE - 4 * 1024  # MAX_BUFFER_SIZE - 4KB.
@@ -216,10 +202,11 @@ SHARED_PATH = os.path.join(WAZUH_PATH, 'etc', 'shared')
 
 
 # ================================================= Wazuh path - Misc ==================================================
-OSSEC_LOG = os.path.join(WAZUH_PATH, 'logs', 'ossec.log')
+WAZUH_LOGS = os.path.join(WAZUH_PATH, 'logs')
+WAZUH_LOG = os.path.join(WAZUH_LOGS, 'ossec.log')
+WAZUH_LOG_JSON = os.path.join(WAZUH_LOGS, 'ossec.json')
 DATABASE_PATH = os.path.join(WAZUH_PATH, 'var', 'db')
 DATABASE_PATH_GLOBAL = os.path.join(DATABASE_PATH, 'global.db')
-DATABASE_PATH_AGENTS = os.path.join(DATABASE_PATH, 'agents')
 ANALYSISD_STATS = os.path.join(WAZUH_PATH, 'var', 'run', 'wazuh-analysisd.state')
 REMOTED_STATS = os.path.join(WAZUH_PATH, 'var', 'run', 'wazuh-remoted.state')
 OSSEC_TMP_PATH = os.path.join(WAZUH_PATH, 'tmp')
@@ -229,6 +216,7 @@ WDB_PATH = os.path.join(WAZUH_PATH, 'queue', 'db')
 STATS_PATH = os.path.join(WAZUH_PATH, 'stats')
 BACKUP_PATH = os.path.join(WAZUH_PATH, 'backup')
 MULTI_GROUPS_PATH = os.path.join(WAZUH_PATH, 'var', 'multigroups')
+DEFAULT_RBAC_RESOURCES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'rbac', 'default')
 
 
 # ================================================ Wazuh path - Sockets ================================================
@@ -242,6 +230,8 @@ UPGRADE_SOCKET = os.path.join(WAZUH_PATH, 'queue', 'tasks', 'upgrade')
 REMOTED_SOCKET = os.path.join(WAZUH_PATH, 'queue', 'sockets', 'remote')
 TASKS_SOCKET = os.path.join(WAZUH_PATH, 'queue', 'tasks', 'task')
 WDB_SOCKET = os.path.join(WAZUH_PATH, 'queue', 'db', 'wdb')
+WMODULES_SOCKET = os.path.join(WAZUH_PATH, 'queue', 'sockets', 'wmodules')
+QUEUE_SOCKET = os.path.join(WAZUH_PATH, 'queue', 'sockets', 'queue')
 
 
 # ================================================ Wazuh path - Ruleset ================================================

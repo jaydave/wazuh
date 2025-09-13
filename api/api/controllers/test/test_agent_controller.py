@@ -1,3 +1,7 @@
+# Copyright (C) 2015, Wazuh Inc.
+# Created by Wazuh, Inc. <info@wazuh.com>.
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import sys
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
@@ -19,10 +23,9 @@ with patch('wazuh.common.wazuh_uid'):
             get_agent_fields, get_agent_key, get_agent_no_group,
             get_agent_outdated, get_agent_summary_os, get_agent_summary_status,
             get_agent_upgrade, get_agents, get_agents_in_group, get_daemon_stats,
-            get_component_stats, get_group_config, get_group_file_json,
-            get_group_file_xml, get_group_files, get_list_group,
-            get_sync_agent, insert_agent, post_group, post_new_agent,
-            put_agent_single_group, put_group_config,
+            get_component_stats, get_group_config, get_group_file, get_group_files,
+            get_list_group, get_sync_agent, insert_agent, post_group,
+            post_new_agent, put_agent_single_group, put_group_config,
             put_multiple_agent_single_group, put_upgrade_agents,
             put_upgrade_custom_agents, reconnect_agents, restart_agent,
             restart_agents, restart_agents_by_group, restart_agents_by_node)
@@ -105,7 +108,8 @@ async def test_get_agents(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_exp
                     'registerIP': mock_request.query.get('registerIP', None),
                     'group_config_status': None
                 },
-                'q': None
+                'q': None,
+                'distinct': False
                 }
     nested = ['os.version', 'os.name', 'os.platform']
     for field in nested:
@@ -470,24 +474,25 @@ async def test_put_upgrade_agents(mock_exc, mock_dapi, mock_remove, mock_dfunc, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('agents_list', [
-    (['all']),
-    (['001', '002']),
+@pytest.mark.parametrize('agents_list, file_path',  [
+    (['all'], '/var/ossec/valid_file.wpk'),
+    (['001', '002'], '/var/ossec/var/upgrade/valid_file.wpk'),
+    (['001'], '/var/ossec/wrong_file.txt')
 ])
 @patch('api.configuration.api_conf')
 @patch('api.controllers.agent_controller.DistributedAPI.distribute_function', return_value=AsyncMock())
 @patch('api.controllers.agent_controller.remove_nones_to_dict')
 @patch('api.controllers.agent_controller.DistributedAPI.__init__', return_value=None)
 @patch('api.controllers.agent_controller.raise_if_exc', return_value=CustomAffectedItems())
-async def test_put_upgrade_custom_agents(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_exp, agents_list):
+async def test_put_upgrade_custom_agents(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_exp, agents_list, file_path):
     """Verify 'put_upgrade_custom_agents' endpoint is working as expected."""
     mock_request = MagicMock()
-    result = await put_upgrade_custom_agents(request=mock_request, agents_list=agents_list)
+    result = await put_upgrade_custom_agents(request=mock_request, agents_list=agents_list, file_path=file_path)
 
     if 'all' in agents_list:
         agents_list = '*'
     f_kwargs = {'agent_list': agents_list,
-                'file_path': None,
+                'file_path': file_path,
                 'installer': None,
                 'filters': {
                     'manager': None,
@@ -536,7 +541,7 @@ async def test_get_daemon_stats(mock_exc, mock_dapi, mock_remove, mock_dfunc):
     mock_dapi.assert_called_once_with(f=stats.get_daemons_stats_agents,
                                       f_kwargs=mock_remove.return_value,
                                       request_type='distributed_master',
-                                      is_async=False,
+                                      is_async=True,
                                       wait_for_complete=False,
                                       logger=ANY,
                                       rbac_permissions=mock_request['token_info']['rbac_policies'])
@@ -749,9 +754,14 @@ async def test_get_list_group(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock
     f_kwargs = {'offset': 0,
                 'limit': None,
                 'group_list': None,
-                'sort': None,
-                'search': None,
-                'hash_algorithm': hash_
+                'sort_by': ['name'],
+                'sort_ascending': True,
+                'search_text': None,
+                'complementary_search': None,
+                'hash_algorithm': hash_,
+                'q': None,
+                'select': None,
+                'distinct': False
                 }
     mock_dapi.assert_called_once_with(f=agent.get_agent_groups,
                                       f_kwargs=mock_remove.return_value,
@@ -785,7 +795,8 @@ async def test_get_agents_in_group(mock_exc, mock_dapi, mock_remove, mock_dfunc,
                 'filters': {
                     'status': None,
                 },
-                'q': None
+                'q': None,
+                'distinct': False
                 }
     mock_dapi.assert_called_once_with(f=agent.get_agents_in_group,
                                       f_kwargs=mock_remove.return_value,
@@ -899,7 +910,10 @@ async def test_get_group_files(mock_exc, mock_dapi, mock_remove, mock_dfunc, moc
                 'sort_ascending': True,
                 'search_text': None,
                 'complementary_search': None,
-                'hash_algorithm': hash_
+                'hash_algorithm': hash_,
+                'q': None,
+                'select': None,
+                'distinct': False
                 }
     mock_dapi.assert_called_once_with(f=agent.get_group_files,
                                       f_kwargs=mock_remove.return_value,
@@ -920,15 +934,15 @@ async def test_get_group_files(mock_exc, mock_dapi, mock_remove, mock_dfunc, moc
 @patch('api.controllers.agent_controller.remove_nones_to_dict')
 @patch('api.controllers.agent_controller.DistributedAPI.__init__', return_value=None)
 @patch('api.controllers.agent_controller.raise_if_exc', return_value=CustomAffectedItems())
-async def test_get_group_file_json(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_exp, mock_request=MagicMock()):
-    """Verify 'get_group_file_json' endpoint is working as expected."""
-    result = await get_group_file_json(request=mock_request,
+async def test_get_group_file(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_exp, mock_request=MagicMock()):
+    """Verify 'get_group_file' endpoint is working as expected."""
+    result = await get_group_file(request=mock_request,
                                        group_id='001',
                                        file_name='filename_value')
     f_kwargs = {'group_list': ['001'],
                 'filename': 'filename_value',
                 'type_conf': mock_request.query.get('type', None),
-                'return_format': 'json'
+                'raw': False
                 }
     mock_dapi.assert_called_once_with(f=agent.get_file_conf,
                                       f_kwargs=mock_remove.return_value,
@@ -941,35 +955,6 @@ async def test_get_group_file_json(mock_exc, mock_dapi, mock_remove, mock_dfunc,
     mock_exc.assert_called_once_with(mock_dfunc.return_value)
     mock_remove.assert_called_once_with(f_kwargs)
     assert isinstance(result, web_response.Response)
-
-
-@pytest.mark.asyncio
-@patch('api.configuration.api_conf')
-@patch('api.controllers.agent_controller.DistributedAPI.distribute_function', return_value=AsyncMock())
-@patch('api.controllers.agent_controller.remove_nones_to_dict')
-@patch('api.controllers.agent_controller.DistributedAPI.__init__', return_value=None)
-@patch('api.controllers.agent_controller.raise_if_exc', return_value=CustomAffectedItems())
-async def test_get_group_file_xml(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_exp, mock_request=MagicMock()):
-    """Verify 'get_group_file_xml' endpoint is working as expected."""
-    result = await get_group_file_xml(request=mock_request,
-                                      group_id='001',
-                                      file_name='filename_value')
-    f_kwargs = {'group_list': ['001'],
-                'filename': 'filename_value',
-                'type_conf': mock_request.query.get('type', None),
-                'return_format': 'xml'
-                }
-    mock_dapi.assert_called_once_with(f=agent.get_file_conf,
-                                      f_kwargs=mock_remove.return_value,
-                                      request_type='local_master',
-                                      is_async=False,
-                                      wait_for_complete=False,
-                                      logger=ANY,
-                                      rbac_permissions=mock_request['token_info']['rbac_policies']
-                                      )
-    mock_exc.assert_called_once_with(mock_dfunc.return_value)
-    mock_remove.assert_called_once_with(f_kwargs)
-    assert isinstance(result, ConnexionResponse)
 
 
 @pytest.mark.asyncio
@@ -1091,6 +1076,7 @@ async def test_get_agent_outdated(mock_exc, mock_dapi, mock_remove, mock_dfunc, 
                 'limit': DATABASE_LIMIT,
                 'sort': None,
                 'search': None,
+                'select': None,
                 'q': None
                 }
     mock_dapi.assert_called_once_with(f=agent.get_outdated_agents,

@@ -137,7 +137,6 @@ get_rbac_actions:
           - PUT /agents/{agent_id}/group/{group_id}
           - DELETE /agents/group
           - PUT /agents/group
-          - DELETE /groups
       group:modify_assignments:
         description: Change the agents assigned to the group
         resources:
@@ -154,7 +153,6 @@ get_rbac_actions:
           - PUT /agents/{agent_id}/group/{group_id}
           - DELETE /agents/group
           - PUT /agents/group
-          - DELETE /groups
       agent:reconnect:
         description: Force reconnect agents
         resources:
@@ -229,8 +227,7 @@ get_rbac_actions:
           - GET /groups/{group_id}/agents
           - GET /groups/{group_id}/configuration
           - GET /groups/{group_id}/files
-          - GET /groups/{group_id}/files/{file_name}/json
-          - GET /groups/{group_id}/files/{file_name}/xml
+          - GET /groups/{group_id}/files/{file_name}
           - GET /overview/agents
       group:create:
         description: Create new agent groups
@@ -836,23 +833,18 @@ get_rbac_actions:
           effect: deny
         related_endpoints:
           - GET /tasks/status
-      vulnerability:read:
-        description: Allow reading agents' vulnerabilities information
+      event:ingest:
+        description: "Ingest events"
         resources:
-          - agent:id
-          - agent:group
+          - '*:*'
         example:
           actions:
-            - vulnerability:read
+            - event:ingest
           resources:
-            - agent:id:011
-            - agent:group:us-west
-          effect: allow
+            - "*:*:*"
+          effect: "allow"
         related_endpoints:
-          - GET /vulnerability/{agent_id}
-          - GET /vulnerability/{agent_id}/last_scan
-          - GET /vulnerability/{agent_id}/summary/{field}
-
+          - POST /events
 
 get_rbac_resources:
   - params:

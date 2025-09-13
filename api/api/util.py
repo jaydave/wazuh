@@ -4,6 +4,7 @@
 
 import datetime
 import os
+import re
 import typing
 from functools import wraps
 from typing import Union
@@ -11,7 +12,29 @@ from typing import Union
 import six
 from connexion import ProblemException
 
+from api.api_exception import APIError
 from wazuh.core import common, exception
+from wazuh.core.cluster.utils import running_in_master_node
+
+
+class APILoggerSize:
+    size_regex = re.compile(r"(\d+)([KM])")
+    unit_conversion = {
+        'K': 1024,
+        'M': 1024 ** 2
+    }
+
+    def __init__(self, size_string: str):
+        size_string = size_string.upper()
+        try:
+            size, unit = self.size_regex.match(size_string).groups()
+        except AttributeError:
+            raise APIError(2011, details="Size value does not match the expected format: <number><unit> (Available"
+                                         " units: K (kilobytes), M (megabytes). For instance: 45M") from None
+
+        self.size = int(size) * self.unit_conversion[unit]
+        if self.size < self.unit_conversion['M']:
+            raise APIError(2011, details=f"Minimum value for size is 1M. Current: {size_string}")
 
 
 def serialize(item: object) -> object:
@@ -443,3 +466,16 @@ def deprecate_endpoint(link: str = ''):
         return wrapper
 
     return add_deprecation_headers
+
+
+def only_master_endpoint(func):
+    """Decorator used to restrict endpoints only on master node."""
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not running_in_master_node():
+            raise_if_exc(exception.WazuhResourceNotFound(902))
+        else:
+            return func(*args, **kwargs)
+
+    return wrapper

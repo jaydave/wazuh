@@ -1,3 +1,7 @@
+# Copyright (C) 2015, Wazuh Inc.
+# Created by Wazuh, Inc. <info@wazuh.com>.
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import sys
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
@@ -66,7 +70,8 @@ async def test_get_cluster_nodes(mock_exc, mock_dapi, mock_remove, mock_dfunc, m
                     'search': None,
                     'select': None,
                     'filter_type': mock_request.query.get('type', 'all'),
-                    'q': None
+                    'q': None,
+                    'distinct': False
                     }
         mock_dapi.assert_called_once_with(f=cluster.get_nodes_info,
                                           f_kwargs=mock_remove.return_value,
@@ -304,7 +309,7 @@ async def test_get_daemon_stats_node(mock_exc, mock_dapi, mock_remove, mock_dfun
         mock_dapi.assert_called_once_with(f=stats.get_daemons_stats,
                                           f_kwargs=mock_remove.return_value,
                                           request_type='distributed_master',
-                                          is_async=False,
+                                          is_async=True,
                                           wait_for_complete=False,
                                           logger=ANY,
                                           rbac_permissions=mock_request['token_info']['rbac_policies'],
@@ -486,7 +491,9 @@ async def test_get_log_node(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_r
                     'complementary_search': None,
                     'tag': None,
                     'level': None,
-                    'q': None
+                    'q': None,
+                    'select': None,
+                    'distinct': False
                     }
         mock_dapi.assert_called_once_with(f=manager.ossec_log,
                                           f_kwargs=mock_remove.return_value,

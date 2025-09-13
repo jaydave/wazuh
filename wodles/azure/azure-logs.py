@@ -35,7 +35,7 @@ from requests import get, post, HTTPError, RequestException
 import orm
 
 sys.path.insert(0, dirname(dirname(abspath(__file__))))
-from utils import ANALYSISD
+from utils import ANALYSISD, MAX_EVENT_SIZE
 
 
 # URLs
@@ -49,14 +49,10 @@ DATETIME_MASK = '%Y-%m-%dT%H:%M:%S.%fZ'
 
 # Logger parameters
 LOGGING_MSG_FORMAT = '%(asctime)s azure: %(levelname)s: %(message)s'
-LOGGING_DATE_FORMAT = '%Y/%m/%d %I:%M:%S'
+LOGGING_DATE_FORMAT = '%Y/%m/%d %H:%M:%S'
 LOG_LEVELS = {0: logging.WARNING,
               1: logging.INFO,
               2: logging.DEBUG}
-
-CREDENTIALS_URL = 'https://documentation.wazuh.com/current/amazon/services/prerequisites/credentials.html'
-DEPRECATED_MESSAGE = 'The {name} authentication parameter was deprecated in {release}. ' \
-                     'Please use another authentication method instead. Check {url} for more information.'
 
 
 def set_logger():
@@ -78,12 +74,6 @@ def get_script_arguments():
     group.add_argument("--storage", action="store_true", required=False, help="Activates Storage API call.")
 
     # Log Analytics arguments #
-    parser.add_argument("--la_id", metavar='ID', type=str, required=False,
-                        help="Application ID for Log Analytics authentication. "
-                             f"{DEPRECATED_MESSAGE.format(name='la_id', release='4.4', url=CREDENTIALS_URL)}")
-    parser.add_argument("--la_key", metavar="KEY", type=str, required=False,
-                        help="Application Key for Log Analytics authentication. "
-                             f"{DEPRECATED_MESSAGE.format(name='la_key', release='4.4', url=CREDENTIALS_URL)}")
     parser.add_argument("--la_auth_path", metavar="filepath", type=str, required=False,
                         help="Path of the file containing the credentials for authentication.")
     parser.add_argument("--la_tenant_domain", metavar="domain", type=str, required=False,
@@ -98,12 +88,6 @@ def get_script_arguments():
                         help="Time range for the request.")
 
     # Graph arguments #
-    parser.add_argument("--graph_id", metavar='ID', type=str, required=False,
-                        help="Application ID for Graph authentication. "
-                             f"{DEPRECATED_MESSAGE.format(name='graph_id', release='4.4', url=CREDENTIALS_URL)}")
-    parser.add_argument("--graph_key", metavar="KEY", type=str, required=False,
-                        help="Application KEY for Graph authentication. "
-                             f"{DEPRECATED_MESSAGE.format(name='graph_key', release='4.4', url=CREDENTIALS_URL)}")
     parser.add_argument("--graph_auth_path", metavar="filepath", type=str, required=False,
                         help="Path of the file containing the credentials authentication.")
     parser.add_argument("--graph_tenant_domain", metavar="domain", type=str, required=False,
@@ -116,12 +100,6 @@ def get_script_arguments():
                         help="Time range for the request.")
 
     # Storage arguments #
-    parser.add_argument("--account_name", metavar='account', type=str, required=False,
-                        help="Storage account name for authentication. "
-                             f"{DEPRECATED_MESSAGE.format(name='account_name', release='4.4', url=CREDENTIALS_URL)}")
-    parser.add_argument("--account_key", metavar='KEY', type=str, required=False,
-                        help="Storage account key for authentication. "
-                             f"{DEPRECATED_MESSAGE.format(name='account_key', release='4.4', url=CREDENTIALS_URL)}")
     parser.add_argument("--storage_auth_path", metavar="filepath", type=str, required=False,
                         help="Path of the file containing the credentials authentication.")
     parser.add_argument("--container", metavar="container", required=False, type=arg_valid_container_name,
@@ -293,10 +271,6 @@ def start_log_analytics():
     # Read credentials
     if args.la_auth_path and args.la_tenant_domain:
         client, secret = read_auth_file(auth_path=args.la_auth_path, fields=("application_id", "application_key"))
-    elif args.la_id and args.la_key and args.la_tenant_domain:
-        logging.warning(DEPRECATED_MESSAGE.format(name="la_id and la_key", release="4.4", url=CREDENTIALS_URL))
-        client = args.la_id
-        secret = args.la_key
     else:
         logging.error("Log Analytics: No parameters have been provided for authentication.")
         sys.exit(1)
@@ -391,7 +365,7 @@ def get_log_analytics_events(url: str, body: dict, headers: dict, md5_hash: str)
         If the response for the request is not 200 OK.
     """
     logging.info("Log Analytics: Sending a request to the Log Analytics API.")
-    response = get(url, params=body, headers=headers)
+    response = get(url, params=body, headers=headers, timeout=10)
     if response.status_code == 200:
         try:
             columns = response.json()['tables'][0]['columns']
@@ -470,10 +444,6 @@ def start_graph():
     # Read credentials
     if args.graph_auth_path and args.graph_tenant_domain:
         client, secret = read_auth_file(auth_path=args.graph_auth_path, fields=("application_id", "application_key"))
-    elif args.graph_id and args.graph_key and args.graph_tenant_domain:
-        logging.warning(DEPRECATED_MESSAGE.format(name="graph_id and graph_key", release="4.4", url=CREDENTIALS_URL))
-        client = args.graph_id
-        secret = args.graph_key
     else:
         logging.error("Graph: No parameters have been provided for authentication.")
         sys.exit(1)
@@ -563,7 +533,7 @@ def get_graph_events(url: str, headers: dict, md5_hash: str):
     HTTPError
         If the response for the request is not 200 OK.
     """
-    response = get(url=url, headers=headers)
+    response = get(url=url, headers=headers, timeout=10)
 
     if response.status_code == 200:
         response_json = response.json()
@@ -604,10 +574,6 @@ def start_storage():
     logging.info("Storage: Authenticating.")
     if args.storage_auth_path:
         name, key = read_auth_file(auth_path=args.storage_auth_path, fields=("account_name", "account_key"))
-    elif args.account_name and args.account_key:
-        logging.warning(DEPRECATED_MESSAGE.format(name="account_name and account_key", release="4.4", url=CREDENTIALS_URL))
-        name = args.account_name
-        key = args.account_key
     else:
         logging.error("Storage: No parameters have been provided for authentication.")
         sys.exit(1)
@@ -705,11 +671,17 @@ def get_blobs(
         logging.info(f"Storage: The search starts from the date: {desired_datetime} for blobs in "
                      f"container: '{container_name}' and prefix: '/{prefix if prefix is not None else ''}'")
         for blob in blobs:
-            # Skip the blob if nested under prefix but prefix is not setted
-            if prefix is None and len(blob.name.split("/")) > 1:
+            # Skip if the blob is empty
+            if blob.properties.content_length == 0:
+                logging.debug(f"Empty blob {blob.name}, skipping")
+                continue
+            # Skip the blob if nested under the set prefix
+            if prefix is not None and len(blob.name.split("/")) > 2:
+                logging.debug(f"Skipped blob {blob.name}, nested under set prefix {prefix}")
                 continue
             # Skip the blob if its name has not the expected format
             if args.blobs and args.blobs not in blob.name:
+                logging.debug(f"Skipped blob, name {blob.name} does not match with the format '{args.blobs}'")
                 continue
 
             # Skip the blob if already processed
@@ -797,7 +769,7 @@ def get_token(client_id: str, secret: str, domain: str, scope: str):
     }
     auth_url = f'{URL_LOGGING}/{domain}/oauth2/v2.0/token'
     try:
-        token_response = post(auth_url, data=body).json()
+        token_response = post(auth_url, data=body, timeout=10).json()
         return token_response['access_token']
     except (ValueError, KeyError):
         if token_response['error'] == 'unauthorized_client':
@@ -825,9 +797,24 @@ def send_message(message: str):
         The message body to send to analysisd.
     """
     s = socket(AF_UNIX, SOCK_DGRAM)
+  
     try:
+        msg = message
+        sign_in_logs_matches = ['azure_aad_tag','azure-active_directory_signIns']
+        if all([m in message for m in sign_in_logs_matches]):
+            msg_tmp = loads(message)
+            # Copy the status fields into a azureSignInStatus field and put a dummy keyword in status field
+            # only if we have an signIn log from Microsoft Entra ID. Otherwise, the log remains unmodified.
+            msg_tmp['azureSignInStatus'] = msg_tmp["status"]
+            msg_tmp['status'] = 'None'
+            msg = dumps(msg_tmp)
+        encoded_msg = f'{SOCKET_HEADER}{msg}'.encode(errors='replace')
+
+        # Logs warning if event is bigger than max size
+        if len(encoded_msg) > MAX_EVENT_SIZE:
+            logging.warning(f"WARNING: Event size exceeds the maximum allowed limit of {MAX_EVENT_SIZE} bytes.")
         s.connect(ANALYSISD)
-        s.send(f'{SOCKET_HEADER}{message}'.encode(errors='replace'))
+        s.send(encoded_msg)
     except socket_error as e:
         if e.errno == 111:
             logging.error("ERROR: Wazuh must be running.")

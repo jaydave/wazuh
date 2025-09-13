@@ -1,6 +1,7 @@
 # Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import asyncio
 import json
 import logging
@@ -12,6 +13,7 @@ from unittest.mock import call, MagicMock, patch
 import pytest
 from connexion import ProblemException
 from sqlalchemy.exc import OperationalError
+from sqlite3 import OperationalError as SQLiteOperationalError, DatabaseError, Error
 
 from wazuh.core import common
 
@@ -36,7 +38,8 @@ with patch('wazuh.common.wazuh_uid'):
         from wazuh.core.cluster import local_client
 
 logger = logging.getLogger('wazuh')
-loop = asyncio.get_event_loop()
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 DEFAULT_REQUEST_TIMEOUT = 10
 
@@ -66,12 +69,16 @@ def raise_if_exc_routine(dapi_kwargs, expected_error=None):
 
 class TestingLoggerParent:
     """Class used to create the parent attribute of TestingLogger objects."""
+    __test__ = False
+
     def __init__(self):
         self.handlers = []
 
 
 class TestingLogger:
     """Class used to create custom Logger objects for testing purposes."""
+    __test__ = False
+    
     def __init__(self, logger_name):
         self.name = logger_name
         self.handlers = []
@@ -94,8 +101,7 @@ class TestingLogger:
     {'api_timeout': 15},
     {'api_timeout': 5}
 ])
-@patch('wazuh.core.cluster.dapi.dapi.common.WAZUH_INSTALL_TYPE', return_value='local')
-def test_DistributedAPI(install_type_mock, kwargs):
+def test_DistributedAPI(kwargs):
     """Test constructor from DistributedAPI class.
 
     Parameters
@@ -293,9 +299,18 @@ def test_DistributedAPI_local_request(mock_local_request):
         dapi_kwargs = {'f': manager.status, 'logger': logger}
         raise_if_exc_routine(dapi_kwargs=dapi_kwargs, expected_error=3021)
 
-    with patch('asyncio.wait_for', new=AsyncMock(side_effect=OperationalError(statement=None, params=[], orig=None))):
+    orig_message = 'database or disk is full'
+    orig = SQLiteOperationalError(DatabaseError(Error(Exception(orig_message))))
+    with patch('asyncio.wait_for', new=AsyncMock(side_effect=OperationalError(statement=None, params=[], orig=orig))):
         dapi_kwargs = {'f': manager.status, 'logger': logger}
         raise_if_exc_routine(dapi_kwargs=dapi_kwargs, expected_error=2008)
+
+        dapi = DistributedAPI(f=manager.status, logger=logger, debug=True)
+        try:
+            raise_if_exc(loop.run_until_complete(dapi.distribute_function()))
+        except WazuhInternalError as e:
+            assert e.code == 2008
+            assert str(e).endswith(orig_message)
 
     with patch('asyncio.wait_for', new=AsyncMock(side_effect=WazuhInternalError(1001))):
         dapi_kwargs = {'f': manager.status, 'logger': logger}
@@ -355,7 +370,7 @@ def test_DistributedAPI_get_client(loop_mock):
 
     node = Node()
     dapi = DistributedAPI(f=agent.get_agents_summary_status, node=node, logger=logger)
-    assert dapi.get_client() == node
+    assert dapi.get_client()
 
 
 @patch('wazuh.core.cluster.cluster.get_node', return_value={'type': 'worker'})

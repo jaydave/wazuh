@@ -1,5 +1,6 @@
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
-# This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import asyncio
 import base64
@@ -25,9 +26,7 @@ from wazuh import Wazuh
 from wazuh.core import common, exception
 from wazuh.core import utils
 from wazuh.core.cluster import cluster, utils as cluster_utils
-from wazuh.core.common import DECIMALS_DATE_FORMAT
 from wazuh.core.wdb import WazuhDBConnection
-
 
 class Response:
     """
@@ -129,6 +128,9 @@ class SendStringTask:
     """
     Create an asyncio task that can be identified by a task_id specified in advance.
     """
+    # Due to a CPython bug in the asyncio library, tasks must be hard-referenced so that they are not deleted
+    # by the garbage collector (https://github.com/python/cpython/issues/91887).
+    tasks_hard_reference = set()
 
     def __init__(self, wazuh_common, logger):
         """Class constructor.
@@ -143,6 +145,7 @@ class SendStringTask:
         self.wazuh_common = wazuh_common
         self.coro = self.set_up_coro()
         self.task = asyncio.create_task(self.coro())
+        self.tasks_hard_reference.add(self.task)
         self.task.add_done_callback(self.done_callback)
         self.logger = logger
 
@@ -161,6 +164,7 @@ class SendStringTask:
 
         Remove string and task_id (if exist) from sync_tasks dict. If task was not cancelled, raise stored exception.
         """
+        self.tasks_hard_reference.discard(self.task)
         if not self.task.cancelled():
             task_exc = self.task.exception()
             if task_exc:
@@ -604,80 +608,13 @@ class Handler(asyncio.Protocol):
 
         for error in result['error_messages']['chunks']:
             logger.debug2(f'Chunk {error[0] + 1}/{len(data["chunks"])}: {data["chunks"][error[0]]}')
-            logger.error(
-                f'Wazuh-db response for chunk {error[0] + 1}/{len(data["chunks"])} was not "ok": {error[1]}')
+            logger.error(f'Wazuh-db response for chunk {error[0] + 1}/{len(data["chunks"])} was not "ok": {error[1]}')
 
         logger.debug(f'{result["updated_chunks"]}/{len(data["chunks"])} chunks updated in wazuh-db '
                      f'in {result["time_spent"]:.3f}s.')
         result['error_messages'] = [error[1] for error in result['error_messages']['chunks']]
 
         return result
-
-    async def send_result_to_manager(self, command: bytes, result: dict) -> bytes:
-        """Send the results to the manager with the specified command.
-
-        Parameters
-        ----------
-        command : bytes
-            Command sent to the sender node.
-        result : dict
-            Insertion operation result.
-
-        Returns
-        -------
-        response : bytes
-            Response from the receiving node to the sender node of the task.
-        """
-        try:
-            response = await self.send_request(command=command, data=json.dumps(result).encode())
-        except Exception as e:
-            response = str(e)
-
-        return response
-
-    async def sync_wazuh_db_information(self, task_id: bytes, info_type: str, logger: logging.Logger,
-                                        command: bytes, error_command: bytes, timeout: int,
-                                        sync_dict: dict = None) -> bytes:
-        """Create a process to send to the local wazuh-db the chunks of data received from a master/worker node.
-
-        Parameters
-        ----------
-        task_id : bytes
-            Pre-defined task_id to identify this object.
-        info_type : str
-            Information type handled.
-        logger : Logger object
-            Logger to use.
-        command : bytes
-            Command sent to the sender node.
-        error_command : bytes
-            Command sent to the sender node in case of error.
-        timeout : int
-            Seconds to wait before stopping the wdb update task.
-        sync_dict : dict
-            Dictionary with general cluster information.
-
-        Returns
-        -------
-        response : bytes
-            Response from the receiving node to the sender node of the task.
-        """
-        sync_dict = sync_dict if sync_dict is not None else {}
-        logger.info('Starting.')
-
-        start_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-        data = await self.get_chunks_in_task_id(task_id, error_command)
-        result = await self.update_chunks_wdb(data, info_type, logger, error_command, timeout)
-        response = await self.send_result_to_manager(command, result)
-        end_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-
-        sync_dict.update({'date_start_master': start_time.strftime(DECIMALS_DATE_FORMAT),
-                          'date_end_master': end_time.strftime(DECIMALS_DATE_FORMAT),
-                          'n_synced_chunks': result['updated_chunks']})
-        logger.info(f'Finished in {(end_time - start_time).total_seconds():.3f}s. '
-                    f'Updated {result["updated_chunks"]} chunks.')
-
-        return response
 
     async def send_file(self, filename: str, task_id: bytes = None) -> int:
         """Send a file to peer, slicing it into chunks.
@@ -810,12 +747,15 @@ class Handler(asyncio.Protocol):
         try:
             await self.get_manager().local_server.clients[client].send_request(b'ok', self.in_str[string_id].payload)
         except Exception as e:
-            self.logger.error(f"Error sending sendsync response to local client: {e}")
             if isinstance(e, exception.WazuhException):
-                exc = json.dumps(e, cls=WazuhJSONEncoder)
+                if e.code == 3020:
+                    return
+                else:
+                    exc = json.dumps(e, cls=WazuhJSONEncoder)
             else:
                 exc = json.dumps(exception.WazuhClusterError(1000, extra_message=str(e)), cls=WazuhJSONEncoder)
             with contextlib.suppress(Exception):
+                self.logger.error(f"Error sending sendsync response to local client: {e}")
                 await self.send_request(b'sendsync_err', exc.encode())
         finally:
             # Remove the string after using it
@@ -926,6 +866,8 @@ class Handler(asyncio.Protocol):
             return self.end_file(data)
         elif command == b'cancel_task':
             return self.cancel_task(data)
+        elif command == b'dapi_err':
+            return self.process_dapi_error(data)
         else:
             return self.process_unknown_cmd(command)
 
@@ -967,6 +909,32 @@ class Handler(asyncio.Protocol):
             Response message.
         """
         return b'ok', data
+
+    def process_dapi_error(self, data: bytes) -> Tuple[bytes, bytes]:
+        """Send DAPI error command to client.
+
+        Parameters
+        ----------
+        data : bytes
+            Bytes containing client and error message separated by ' '.
+
+        Returns
+        -------
+        bytes
+            Result.
+        bytes
+            Response message.
+        """
+        dapi_client, error_msg = data.split(b' ', 1)
+        if dapi_client.decode() in self.server.local_server.clients:
+            try:
+                asyncio.create_task(
+                    self.server.local_server.clients[dapi_client.decode()].send_request(b'dapi_err', error_msg))
+            except exception.WazuhClusterError:
+                raise exception.WazuhClusterError(3025)
+        else:
+            raise exception.WazuhClusterError(3032, extra_message=dapi_client.decode())
+        return b'ok', b'DAPI error forwarded to worker'
 
     def receive_file(self, data: bytes) -> Tuple[bytes, bytes]:
         """Create a file descriptor to store the incoming file.
@@ -1469,8 +1437,10 @@ class SyncFiles(SyncTask):
 
         self.logger.debug(f"Compressing {'files and ' if files else ''}"
                           f"'files_metadata.json' of {metadata_len} files.")
-        compressed_data = await cluster.run_in_pool(self.server.loop, task_pool, cluster.compress_files,
-                                                    self.server.name, files, files_metadata, zip_limit)
+        compressed_data, logs = await cluster.run_in_pool(self.server.loop, task_pool, cluster.compress_files,
+                                                          self.server.name, files, files_metadata, zip_limit)
+
+        cluster_utils.log_subprocess_execution(self.logger, logs)
 
         try:
             # Start the synchronization process with peer node and get a taskID.
@@ -1518,8 +1488,12 @@ class SyncFiles(SyncTask):
                     self.logger.debug(f"Increasing sync size limit to {self.server.current_zip_limit / (1024**2):.2f}"
                                       f" MB.")
 
-            # Remove local file.
-            os.unlink(compressed_data)
+            try:
+                # Remove local file.
+                os.unlink(compressed_data)
+            except FileNotFoundError:
+                self.logger.error(f"File {compressed_data} could not be removed/not found. "
+                                  f"May be due to a lost connection.")
 
 
 class SyncWazuhdb(SyncTask):
@@ -1637,18 +1611,19 @@ class SyncWazuhdb(SyncTask):
         return True
 
 
-def end_sending_agent_information(logger, start_time, response) -> Tuple[bytes, bytes]:
-    """Function called when the master/worker sends the "syn_m_a_e", "syn_m_g_e" or "syn_w_g_e" command.
+def end_sending_agent_information(logger: logging.Logger, start_time: datetime.datetime,
+                                  response: str) -> Tuple[bytes, bytes]:
+    """Function called when the master/worker sends the "syn_m_a_e" or "syn_w_g_e" command.
 
     This method is called once the master finishes processing the agent-info/agent-groups. It logs
     information like the number of chunks that were updated and any error message.
 
     Parameters
     ----------
-    logger : Logger object
+    logger : logging.Logger
         Logger to use during synchronization process.
-    start_time : float
-        Timestamp collected at the start of the end process of a task of type agent-information.
+    start_time : datetime.datetime
+        Time collected at the start of the end process of an agent-information task.
     response : str
         JSON containing information about agent-info/agent-groups sync status.
 
@@ -1660,7 +1635,9 @@ def end_sending_agent_information(logger, start_time, response) -> Tuple[bytes, 
         Response message.
     """
     data = json.loads(response)
-    msg = f"Finished in {(utils.get_utc_now().timestamp() - start_time):.3f}s. Updated {data['updated_chunks']} chunks."
+    msg = f"Finished in {(utils.get_utc_now().timestamp() - start_time.timestamp()):.3f}s. " + \
+    f"Updated {data['updated_chunks']} chunks."
+
     logger.info(msg) if not data['error_messages'] else logger.error(
         msg + f" There were {len(data['error_messages'])} chunks with errors: {data['error_messages']}")
 
@@ -1669,7 +1646,7 @@ def end_sending_agent_information(logger, start_time, response) -> Tuple[bytes, 
 
 def error_receiving_agent_information(logger, response, info_type):
     """Function called when the master/worker sends the
-    "syn_m_a_err", "syn_m_g_err", "syn_w_g_err" or "syn_w_g_err" command.
+    "syn_m_a_err", "syn_w_g_err" or "syn_w_g_err" command.
 
     Parameters
     ----------
@@ -1687,7 +1664,7 @@ def error_receiving_agent_information(logger, response, info_type):
     bytes
         Response message.
     """
-    logger.error(f"There was an error while processing {info_type} on the master: {response}")
+    logger.error(f"There was an error while processing {info_type} on the peer: {response}")
 
     return b'ok', b'Thanks'
 

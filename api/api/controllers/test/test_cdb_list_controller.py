@@ -1,3 +1,7 @@
+# Copyright (C) 2015, Wazuh Inc.
+# Created by Wazuh, Inc. <info@wazuh.com>.
+# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+
 import sys
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -37,6 +41,8 @@ async def test_get_lists(mock_exc, mock_dapi, mock_remove, mock_dfunc, mock_requ
                 'complementary_search': None,
                 'filename': None,
                 'relative_dirname': None,
+                'q': None,
+                'distinct': False
                 }
     mock_dapi.assert_called_once_with(f=cdb_list.get_lists,
                                       f_kwargs=mock_remove.return_value,
